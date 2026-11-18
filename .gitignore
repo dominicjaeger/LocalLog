@@ -1,0 +1,7 @@
+*.csv
+*.tmp
+*.bak
+*.db
+*.wal
+*.shm
+Backup_*/
