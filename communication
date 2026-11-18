@@ -1,20 +1,22 @@
 GitHub Repository "About" Description:
 
-    A lightweight, zero-install Windows desktop helper for effortless, local-first project time tracking, smart transition reminders, and one-click Excel export.
+    Simple, privacy-friendly time tracking for projects as a web app (PWA): customers, projects, tickets, one-click Excel export. Hosted on the web, but all data stays on your own device.
 
 Manager Email:
 
-    Subject: Quick heads-up: Small personal time-tracking helper I built for my workflow
+    Subject: Quick heads-up: Small personal time-tracking tool I built for my workflow
 
     Hi,
 
-    Bottom line upfront: To make my own daily project time tracking easier, I put together a lightweight personal desktop helper in my spare time. A few colleagues might find it useful too, so I wanted to give you a quick heads-up before sharing it informally with the team.
+    Bottom line upfront: To make my own daily project time tracking easier, I put together a small web app in my spare time. A few colleagues might find it useful too, so I wanted to give you a quick heads-up before sharing the link informally with the team.
 
     What it is (and isn't):
 
-        Effortless daily tracking: It sits quietly in the background and gives gentle prompts to switch or pause projects at natural transition points—such as right after an online call ends or after unlocking the PC—and lets you copy your hours cleanly into Excel.
+        Simple daily tracking: You start a timer for a customer and project (optionally with a ticket number), correct entries directly in the table, and copy your hours cleanly into Excel. A gentle reminder can ask every 30 or 60 minutes whether you are still on the same task.
 
-        Zero installation or IT impact: It runs directly on Windows without installing any software, modifying system settings, or connecting to any external servers or company systems. Every user's log stays strictly private on their own computer.
+        Nothing to install, nothing sent anywhere: It is a web page that you open in Chrome or Edge (you can optionally install it like an app). The page itself is delivered from a public website, but everything you enter is saved only in your own browser on your own computer. It does not connect to any company system, does not send data anywhere, has no accounts and no tracking. A built-in security rule prevents the page from sending data over the network.
+
+        Your responsibility to back up: Because the data lives only in your browser, clearing browser data deletes it. The app explains this and offers a backup folder and file downloads.
 
         Unofficial personal project: I built this independently as a private hobby project and published it openly under the MIT License. I will make it clear to the team that it is not an official company tool and comes without formal support or guarantees.
 
@@ -26,16 +28,16 @@ Manager Email:
 
 Teams Message:
 
-    Bottom line upfront: If you want an effortless way to track your project hours without installing anything or guessing what you worked on every Friday, I built a small desktop tool called LocalLog that you’re welcome to use.
+    Bottom line upfront: If you want an easy way to track your project hours without guessing what you worked on every Friday, I built a small web app called LocalLog that you're welcome to use.
 
     Here is how it helps during the day:
 
-        Subtle awareness: A small status dot near your clock shows which project is running—or gently reminds you if no timer is active—without getting in your way.
+        Simple tracking: Start a timer for a customer and project, add a ticket number if you like, and fix any entry right in the table by clicking it.
 
-        Smart transition nudges: It prompts you to switch or pause your timer right after an online call ends, when you lock/unlock your PC, and via a quick 30-minute check-in card.
+        Gentle reminders: An optional reminder asks every 30 or 60 minutes whether you are still working on the same task, and a small always-on-top window (Chrome and Edge) can show your running time.
 
-        Zero clutter & 1-click Excel copy: Add or deactivate projects in seconds, view your hours in a clean table, and copy everything with one click to paste straight into Excel.
+        1-click Excel export: Copy your hours (today, this week, this month or everything) and paste them straight into Excel, or download a CSV file. There is also a weekly overview per customer and project.
 
-        No setup & 100% private: Nothing to install—just launch it and go. Your time entries stay locally on your own PC.
+        Private by design: Nothing to install and no account. The page loads from the web, but your entries stay only in your own browser on your own computer and are never sent anywhere. The interface is available in English and German.
 
-    Quick note: This is a personal side project rather than an official company-supported tool, so it comes as-is without formal support—remember to export or back up your hours regularly!
+    Quick note: This is a personal side project rather than an official company-supported tool, so it comes as-is without formal support. Your entries are only stored in your browser, so please set up the backup folder or export your hours regularly!

@@ -1,357 +1,443 @@
 <!DOCTYPE html>
-<html lang="de-AT" data-theme="light">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LocalLog - Local-First Time Tracker</title>
-  
-  <meta name="description" content="Lightweight, zero-install, local-first project time tracking with 1-click Excel export and ambient awareness.">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; connect-src 'none'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>LocalLog</title>
+
+  <meta name="description" content="Simple time tracking for your projects. Your data stays on your computer.">
   <meta name="theme-color" content="#0078D4">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="LocalLog">
-  
+
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
-  <!-- Keyboard Accessible Skip Link -->
-  <a href="#mainContent" class="skip-link">Skip to main content</a>
+  <a href="#mainContent" class="skip-link" data-i18n="app.skip">Skip to main content</a>
 
   <div class="container">
-    
-    <!-- App Header -->
+
     <header class="app-header">
       <div class="brand-section">
-        <img src="./icons/icon.svg" alt="" class="brand-icon" aria-hidden="true">
+        <img src="./icons/icon.svg" alt="" class="brand-icon" width="32" height="32">
         <div>
-          <div style="display: flex; align-items: center; gap: 8px;">
+          <div class="brand-line">
             <h1 class="brand-title">LocalLog</h1>
-            <span class="version-badge">v2.0 PWA</span>
+            <span id="appVersion" class="version-badge"></span>
           </div>
-          <span class="privacy-badge">100% Local-First • Zero Network Traffic</span>
+          <span class="privacy-badge" data-i18n="app.tagline">Your data stays on this computer</span>
         </div>
       </div>
-      
+
       <div class="header-controls">
-        <button id="btnToggleTheme" class="btn btn-theme" aria-label="Switch theme mode (Default: Light)" title="Toggle Dark/Light Mode">
-          ☀️
-        </button>
+        <div class="lang-toggle" role="group" data-i18n-aria-label="header.language" aria-label="Language">
+          <button type="button" id="btnLangEn" class="lang-btn" data-lang="en" aria-pressed="false">EN</button>
+          <button type="button" id="btnLangDe" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+        </div>
+        <button id="btnTogglePip" type="button" class="btn btn-theme" data-i18n-title="mini.open" data-i18n-aria-label="mini.open" hidden></button>
+        <button id="btnToggleTheme" type="button" class="btn btn-theme"></button>
       </div>
     </header>
 
-    <!-- Optional PWA Install Banner -->
-    <div id="bannerInstall" class="banner banner-info" role="status" style="display: none;">
-      <span><strong>Install LocalLog:</strong> Run LocalLog in its own standalone desktop window with offline access.</span>
-      <button id="btnInstallPwa" class="btn btn-primary btn-sm">Install App</button>
-    </div>
+    <div id="banners">
+      <div id="bannerPrivate" class="banner banner-warning" role="alert" hidden>
+        <span data-i18n="banner.private">Private window: your entries will be lost when this window closes.</span>
+      </div>
 
-    <!-- 30-Minute Check-in Banner -->
-    <div id="bannerCheckIn" class="banner banner-warning" role="alert" style="display: none;">
-      <span id="txtCheckInMsg">30-Minute Check-in: Still working on this task?</span>
-      <div style="display: flex; gap: 8px;">
-        <button id="btnCheckInKeep" class="btn btn-primary btn-sm">Keep Going</button>
-        <button id="btnCheckInSwitch" class="btn btn-secondary btn-sm">Switch / Stop</button>
+      <div id="bannerFolder" class="banner banner-warning" role="alert" hidden>
+        <span data-i18n="banner.folderLost">The backup folder needs your permission again.</span>
+        <button id="btnReconnect" type="button" class="btn btn-primary btn-sm" data-i18n="banner.reconnect">Reconnect folder</button>
+      </div>
+
+      <div id="bannerRecover" class="banner banner-info" role="alert" hidden>
+        <span id="txtRecoverMsg"></span>
+        <div class="banner-actions">
+          <button id="btnRecoverKeep" type="button" class="btn btn-primary btn-sm" data-i18n="recover.keep">Keep running</button>
+          <button id="btnRecoverLast" type="button" class="btn btn-secondary btn-sm" data-i18n="recover.stopLast">Stop at last activity</button>
+          <button id="btnRecoverNow" type="button" class="btn btn-secondary btn-sm" data-i18n="recover.stopNow">Stop now</button>
+        </div>
+      </div>
+
+      <div id="bannerCheckIn" class="banner banner-warning" role="alert" hidden>
+        <span id="txtCheckInMsg"></span>
+        <div class="banner-actions">
+          <button id="btnCheckInKeep" type="button" class="btn btn-primary btn-sm" data-i18n="checkin.keep">Keep going</button>
+          <button id="btnCheckInSwitch" type="button" class="btn btn-secondary btn-sm" data-i18n="checkin.switch">Switch project</button>
+          <button id="btnCheckInStop" type="button" class="btn btn-secondary btn-sm" data-i18n="checkin.stop">Stop</button>
+        </div>
+      </div>
+
+      <div id="bannerInstall" class="banner banner-info" role="status" hidden>
+        <span data-i18n="banner.install">Install LocalLog to open it like a regular app, even without internet.</span>
+        <button id="btnInstallPwa" type="button" class="btn btn-primary btn-sm" data-i18n="banner.installButton">Install</button>
       </div>
     </div>
 
-    <!-- Fluent 2 Bento Grid -->
     <div class="bento-grid">
-      
-      <!-- Main Bento Card: Timer & Controls -->
-      <section class="bento-card bento-card-main" aria-label="Timer Control">
+
+      <section class="bento-card bento-card-main" data-i18n-aria-label="timer.region" aria-label="Timer">
         <div class="timer-header">
           <div class="stopwatch-wrapper">
-            <div id="orbDot" class="orb-dot" title="Status Indicator" aria-hidden="true"></div>
+            <div id="orbDot" class="orb-dot" aria-hidden="true"></div>
             <div>
-              <div id="txtStopwatch" class="stopwatch-display" aria-live="polite">00:00:00</div>
-              <div id="txtActiveRateHint" class="timer-hint">No timer active</div>
+              <div id="txtStopwatch" class="stopwatch-display">00:00:00</div>
+              <div id="txtActiveHint" class="timer-hint" data-i18n="timer.noneActive">No timer running</div>
             </div>
           </div>
         </div>
 
         <div class="timer-inputs">
           <div>
-            <label for="cmbActiveProjects" class="visually-hidden" style="display: none;">Select Project</label>
-            <select id="cmbActiveProjects" class="form-select" aria-label="Select Project">
-              <!-- Populated dynamically -->
-            </select>
+            <label for="cmbProjects" class="visually-hidden" data-i18n="timer.project">Project</label>
+            <select id="cmbProjects" class="form-select"></select>
           </div>
           <div>
-            <label for="txtQuickNote" class="visually-hidden" style="display: none;">Work block note</label>
-            <input id="txtQuickNote" type="text" class="form-input" placeholder="Note (e.g. Planning workshop review)..." aria-label="Work block note">
+            <label for="txtTicket" class="visually-hidden" data-i18n="timer.ticket">Ticket (optional)</label>
+            <input id="txtTicket" type="text" class="form-input" maxlength="60" autocomplete="off" data-i18n-placeholder="timer.ticketPlaceholder" placeholder="Ticket (optional)">
+          </div>
+          <div class="span-2">
+            <label for="txtQuickNote" class="visually-hidden" data-i18n="timer.note">Note</label>
+            <input id="txtQuickNote" type="text" class="form-input" maxlength="500" autocomplete="off" data-i18n-placeholder="timer.notePlaceholder" placeholder="What are you working on?">
           </div>
         </div>
 
         <div class="timer-actions">
           <div class="action-buttons">
-            <button id="btnStartPause" class="btn btn-primary">Start</button>
-            <button id="btnStop" class="btn btn-secondary" disabled>Stop &amp; Log</button>
+            <button id="btnStartPause" type="button" class="btn btn-primary" data-i18n="timer.start">Start</button>
+            <button id="btnStop" type="button" class="btn btn-secondary" disabled data-i18n="timer.stop">Stop</button>
           </div>
           <div class="hotkey-hint">
-            Shortcut: <kbd>Alt</kbd> + <kbd>S</kbd> to Start/Pause
+            <span data-i18n="timer.shortcut">Start / pause:</span> <kbd>Alt</kbd> + <kbd>S</kbd>
           </div>
         </div>
       </section>
 
-      <!-- Side Bento Card: Today's Metrics & Sync Indicator -->
-      <aside class="bento-card-side" aria-label="Daily Metrics">
+      <aside class="bento-card-side" data-i18n-aria-label="side.region" aria-label="Overview">
         <div class="metric-box">
-          <div class="metric-label">Today's Total</div>
-          <div id="txtTodaySummary" class="metric-value">0,00 h</div>
-          <div id="txtTodayEntriesCount" class="metric-sub">0 time blocks logged today</div>
+          <div class="metric-label" data-i18n="today.label">Today</div>
+          <div id="txtTodaySummary" class="metric-value">0.00 h</div>
+          <div id="txtTodayCount" class="metric-sub"></div>
         </div>
 
-        <div class="metric-box" style="display: flex; flex-direction: column; justify-content: space-between;">
-          <div class="metric-label">Local Storage Status</div>
-          <div id="txtFolderMiniStatus" style="font-size: 13px; font-weight: 600; color: var(--text-primary);">
-            IndexedDB (Offline)
-          </div>
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-            Optional 2-way disk sync available in Settings
-          </div>
+        <div class="metric-box">
+          <div class="metric-label" data-i18n="data.title">Your data</div>
+          <dl class="data-list">
+            <dt data-i18n="data.where">Saved in</dt>
+            <dd id="dataLocation"></dd>
+            <dt data-i18n="data.protection">Protection</dt>
+            <dd id="dataProtection"></dd>
+            <dt data-i18n="data.lastBackup">Last backup</dt>
+            <dd id="dataBackupRow" class="data-backup">
+              <span id="dataLastBackup"></span>
+              <button id="btnBackupNow" type="button" class="btn btn-sm btn-primary" hidden data-i18n="data.backupNow">Back up now</button>
+            </dd>
+          </dl>
+          <p id="dataError" class="data-error" role="alert" hidden></p>
         </div>
       </aside>
 
     </div>
 
-    <!-- Tabbed Content Section (WAI-ARIA Pattern) -->
     <main id="mainContent" class="tabs-container">
-      <nav class="tab-nav" role="tablist" aria-label="Main Navigation">
-        <button id="tab-btn-entries" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tabEntries" tabindex="0">
-          📋 Time Entries
-        </button>
-        <button id="tab-btn-projects" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabProjects" tabindex="-1">
-          📁 Projects
-        </button>
-        <button id="tab-btn-sync" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabSync" tabindex="-1">
-          ⚙️ Disk Sync &amp; Ambient Modes
-        </button>
-        <button id="tab-btn-about" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabAbout" tabindex="-1">
-          🛡️ About &amp; Privacy
-        </button>
+      <nav class="tab-nav" role="tablist" data-i18n-aria-label="tabs.label" aria-label="Main navigation">
+        <button id="tab-btn-entries" type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tabEntries" tabindex="0" data-i18n="tabs.entries">Entries</button>
+        <button id="tab-btn-catalog" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabCatalog" tabindex="-1" data-i18n="tabs.catalog">Customers &amp; Projects</button>
+        <button id="tab-btn-settings" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabSettings" tabindex="-1" data-i18n="tabs.settings">Settings</button>
+        <button id="tab-btn-about" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabAbout" tabindex="-1" data-i18n="tabs.about">About</button>
       </nav>
 
-      <!-- TAB 1: Entries Table -->
+      <!-- Entries -->
       <section id="tabEntries" class="tab-panel active" role="tabpanel" aria-labelledby="tab-btn-entries">
         <div class="table-toolbar">
-          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-            <button id="btnAddEntryManual" class="btn btn-primary btn-sm" title="Manually record a completed work block">
-              + Add Entry
-            </button>
-            <button id="btnCopyTsv" class="btn btn-outline btn-sm" title="Copy clean table to clipboard (Alt+C)">
-              📋 Copy for Excel
-            </button>
-            <label style="font-size: 12.5px; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; gap: 6px; margin-left: 6px;">
-              <input type="checkbox" id="chkIncludeRates" style="width: 15px; height: 15px; cursor: pointer;">
-              Include EUR rate &amp; value
+          <div class="toolbar-group">
+            <button id="btnAddEntry" type="button" class="btn btn-primary btn-sm" data-i18n="entries.add">Add entry</button>
+            <label class="inline-field">
+              <span data-i18n="entries.show">Show</span>
+              <select id="selRange" class="form-select form-select-sm">
+                <option value="today" data-i18n="range.today">Today</option>
+                <option value="week" data-i18n="range.week">This week</option>
+                <option value="month" data-i18n="range.month">This month</option>
+                <option value="all" data-i18n="range.all">All</option>
+              </select>
+            </label>
+            <label class="check-label">
+              <input type="checkbox" id="chkIncludeRates">
+              <span data-i18n="entries.includeRates">Show rate and value (EUR)</span>
             </label>
           </div>
-          <span id="txtCopyFeedback" style="font-size: 12px; color: var(--success); font-weight: 600;" role="status"></span>
+          <div id="exportMenuSlot"></div>
         </div>
 
         <div class="table-responsive">
-          <table class="data-table" aria-label="Logged Time Entries">
+          <table class="data-table" data-i18n-aria-label="entries.tableLabel" aria-label="Time entries">
             <thead>
               <tr>
-                <th scope="col" style="width: 90px;">Date</th>
-                <th scope="col" style="width: 100px;">Time</th>
-                <th scope="col" style="width: 180px;">Project / Work Block</th>
-                <th scope="col" style="width: 80px;">Duration</th>
-                <th scope="col" style="width: 80px;">Hours (h)</th>
-                <th id="colHeaderRate" scope="col" style="width: 90px; display: none;">Rate (EUR/h)</th>
-                <th id="colHeaderValue" scope="col" style="width: 90px; display: none;">Value (EUR)</th>
-                <th scope="col">Note</th>
-                <th scope="col" style="width: 120px; text-align: right;">Actions</th>
+                <th scope="col" data-i18n="col.date">Date</th>
+                <th scope="col" data-i18n="col.start">Start</th>
+                <th scope="col" data-i18n="col.end">End</th>
+                <th scope="col" data-i18n="col.customerProject">Customer / Project</th>
+                <th scope="col" data-i18n="col.ticket">Ticket</th>
+                <th scope="col" data-i18n="col.duration">Duration</th>
+                <th scope="col" data-i18n="col.hours">Hours</th>
+                <th id="colRate" scope="col" data-i18n="col.rate" hidden>Rate</th>
+                <th id="colValue" scope="col" data-i18n="col.value" hidden>Value</th>
+                <th scope="col" data-i18n="col.note">Note</th>
+                <th scope="col" class="cell-actions"><span class="visually-hidden" data-i18n="col.actions">Actions</span></th>
               </tr>
             </thead>
-            <tbody id="tbodyEntries">
-              <!-- Dynamically populated -->
-            </tbody>
+            <tbody id="tbodyEntries"></tbody>
           </table>
         </div>
-      </section>
+        <p class="hint-line" data-i18n="entries.editHint">Click a cell to edit it. Enter saves, Esc cancels.</p>
 
-      <!-- TAB 2: Projects Management -->
-      <section id="tabProjects" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-projects">
-        <div class="card-section">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px;">
-            <h3 class="card-title" style="margin: 0;">Add New Project</h3>
-            <button type="button" id="btnResetProjects" class="btn btn-outline btn-sm" title="Restore default projects (Operation, General Changes, Project A, Project B)">
-              🔄 Restore Default Projects
-            </button>
-          </div>
-          <p class="card-desc">Create a flat, color-coded project category. Deactivate finished projects anytime to keep your active list clean.</p>
-          
-          <form id="formNewProject" style="display: grid; grid-template-columns: 2fr 70px 1fr auto; gap: 10px; align-items: center;">
-            <input id="txtProjectName" type="text" class="form-input" placeholder="Project name (e.g., Operation, Project A...)" required aria-label="Project Name">
-            <input id="colorProject" type="color" class="form-input" value="#0078D4" style="height: 36px; padding: 2px 4px; cursor: pointer;" title="Choose color" aria-label="Project Color">
-            <input id="txtProjectRate" type="text" class="form-input" value="85,00" placeholder="Hourly rate (EUR)" title="Internal EUR hourly rate" aria-label="Hourly Rate">
-            <button type="submit" class="btn btn-primary">Add Project</button>
-          </form>
-        </div>
-
-        <div class="table-responsive">
-          <table class="data-table" aria-label="Configured Projects">
-            <thead>
-              <tr>
-                <th scope="col">Project Name</th>
-                <th scope="col" style="width: 130px;">Hourly Rate</th>
-                <th scope="col" style="width: 110px;">Status</th>
-                <th scope="col" style="width: 180px; text-align: right;">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="tbodyProjects">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- TAB 3: Disk Sync & Ambient Modes -->
-      <section id="tabSync" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-sync">
-        
-        <!-- Ambient Awareness Test & Switcher -->
-        <div class="card-section">
-          <h3 class="card-title">Ambient Awareness Modes (Test &amp; Compare)</h3>
-          <p class="card-desc">
-            LocalLog provides modern web alternatives to the desktop corner status orb. You can test and use both:
-          </p>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px;">
-            <div style="background: var(--bg-card); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 14px; display: flex; flex-direction: column; justify-content: space-between;">
-              <div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                  <h4 style="font-size: 13px; font-weight: 600; margin: 0;">Floating Document PiP Mini-Timer</h4>
-                  <span style="font-size: 10px; font-weight: 600; background: var(--bg-subtle); color: var(--text-muted); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-subtle);">Optional Feature</span>
-                </div>
-                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
-                  Pops an always-on-top mini floating orb above Excel, Teams, and desktop apps showing your live breathing orb and stopwatch. (Requires Chrome or Edge).
-                </p>
-                <div id="pipSupportAlert" style="display: none; font-size: 11.5px; color: var(--danger); margin-bottom: 8px;">
-                  Note: Document PiP requires Chrome or Edge (Chromium).
-                </div>
-              </div>
-              <div>
-                <button id="btnTogglePip" class="btn btn-outline btn-sm" title="Launch Always-on-Top Floating Mini-Timer (Alt+P)">
-                  🗔 Launch Floating Orb (PiP)
-                </button>
-              </div>
+        <div class="card-section week-card">
+          <div class="week-head">
+            <h3 class="card-title" data-i18n="week.title">Weekly overview</h3>
+            <div class="toolbar-group">
+              <button id="weekPrev" type="button" class="btn btn-outline btn-sm" data-i18n="week.prev">Previous</button>
+              <button id="weekThis" type="button" class="btn btn-outline btn-sm" data-i18n="week.this">This week</button>
+              <button id="weekNext" type="button" class="btn btn-outline btn-sm" data-i18n="week.next">Next</button>
+              <span id="weekExportSlot"></span>
             </div>
+          </div>
+          <div class="week-summary">
+            <span id="weekLabel" class="week-label"></span>
+            <strong id="weekTotal"></strong>
+          </div>
+          <div id="weekBody" class="week-body"></div>
+        </div>
+      </section>
 
-            <div style="background: var(--bg-card); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 14px;">
-              <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 4px;">Option B: Dynamic Favicon &amp; Notifications</h4>
-              <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
-                Renders active project color dot directly inside your browser tab icon and taskbar badge, plus native 30-min reminder cards.
-              </p>
-              <button id="btnTestNotification" class="btn btn-outline btn-sm">
-                🔔 Test 30-Min Notification Card Now
-              </button>
+      <!-- Customers & Projects -->
+      <section id="tabCatalog" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-catalog">
+        <div class="catalog-head">
+          <p class="card-desc" data-i18n="catalog.intro">Group your projects under customers. Deactivate customers or projects you no longer need; they stay in your entries.</p>
+          <button id="btnAddCustomer" type="button" class="btn btn-primary btn-sm" data-i18n="catalog.addCustomer">Add customer</button>
+        </div>
+        <div id="catalogList"></div>
+      </section>
+
+      <!-- Settings -->
+      <section id="tabSettings" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-settings">
+        <div class="card-section">
+          <h3 class="card-title" data-i18n="settings.backupTitle">Backup</h3>
+          <p class="card-desc" data-i18n="settings.backupDesc">Your entries are saved in this browser. For extra safety, choose a folder on your computer: LocalLog keeps a copy of your data there up to date. You can also download a backup at any time.</p>
+          <div class="settings-row">
+            <div id="settingsFolderStatus" class="settings-status"></div>
+            <div class="toolbar-group">
+              <button id="btnChooseFolder" type="button" class="btn btn-primary btn-sm"></button>
+              <button id="btnDisconnectFolder" type="button" class="btn btn-secondary btn-sm" hidden data-i18n="settings.disconnect">Stop using folder</button>
+              <button id="btnDownloadBackup" type="button" class="btn btn-secondary btn-sm" data-i18n="settings.downloadBackup">Download backup files</button>
             </div>
           </div>
         </div>
 
-        <!-- 2-Way Local Disk Sync (File System Access API) -->
         <div class="card-section">
-          <h3 class="card-title">Direct Local CSV Disk Synchronization</h3>
-          <p class="card-desc">
-            Connect LocalLog directly to a folder on your computer (e.g. <code>%LOCALAPPDATA%\LocalLog\</code> or <code>Documents\LocalLog\</code>).
-            Whenever you log hours or edit projects, LocalLog automatically updates real <code>projects.csv</code> and <code>entries.csv</code> files on your hard drive!
-          </p>
-          
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-            <div id="txtFolderStatus" style="font-size: 12.5px; color: var(--text-secondary);">
-              Checking folder status...
-            </div>
-            <div style="display: flex; gap: 8px;">
-              <button id="btnBindFolder" class="btn btn-primary btn-sm">Link Local Folder</button>
-              <button id="btnManualDownload" class="btn btn-secondary btn-sm" title="Download plain CSV files anytime">
-                Download CSVs Directly
-              </button>
-            </div>
-          </div>
+          <h3 class="card-title" data-i18n="settings.reminderTitle">Reminder</h3>
+          <p class="card-desc" data-i18n="settings.reminderDesc">LocalLog can ask you from time to time whether you are still working on the same task.</p>
+          <label class="inline-field">
+            <span data-i18n="settings.reminderEvery">Remind me every</span>
+            <select id="selCheckIn" class="form-select form-select-sm">
+              <option value="0" data-i18n="settings.reminderOff">Never</option>
+              <option value="30" data-i18n="settings.reminder30">30 minutes</option>
+              <option value="60" data-i18n="settings.reminder60">60 minutes</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="pipCard" class="card-section" hidden>
+          <h3 class="card-title" data-i18n="mini.title">Mini window</h3>
+          <p class="card-desc" data-i18n="mini.desc">A small window that stays on top of your other programs and shows the running time. Handy when you work in Excel, Teams or other apps.</p>
+          <button id="btnTogglePipSettings" type="button" class="btn btn-outline btn-sm"></button>
         </div>
       </section>
 
-      <!-- TAB 4: About & Privacy -->
+      <!-- About -->
       <section id="tabAbout" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-about">
         <div class="card-section">
-          <h3 class="card-title">Enterprise Privacy &amp; Architecture</h3>
-          <p class="card-desc" style="line-height: 1.6;">
-            LocalLog is engineered from the ground up for strict enterprise environments where data privacy, zero telemetry, and security transparency are paramount:
-          </p>
-          <ul style="font-size: 12.5px; color: var(--text-secondary); margin-left: 20px; line-height: 1.7;">
-            <li><strong>Zero Network Traffic:</strong> The application runs 100% client-side inside your browser sandbox. It makes zero outbound network calls, transmits no telemetry, and uses no external cloud databases.</li>
-            <li><strong>Offline-First Service Worker:</strong> Once cached, the app functions completely offline without an internet connection.</li>
-            <li><strong>Local Persistence:</strong> All project titles, hourly rates, and time entries reside exclusively inside your computer's browser IndexedDB and optional local CSV folder.</li>
-            <li><strong>Transparent &amp; Auditable:</strong> Built using zero-build pure web standards (HTML5/CSS/JavaScript). Internal security and IT teams can inspect every line of source code.</li>
+          <h3 class="card-title" data-i18n="about.title">About LocalLog</h3>
+          <p class="card-desc" data-i18n="about.intro">LocalLog is a simple time tracker for your projects. Track time for customers and projects, correct entries right in the table and export them for Excel.</p>
+          <ul class="plain-list">
+            <li data-i18n="about.local">Your entries stay in this browser on this computer. They are never sent anywhere.</li>
+            <li data-i18n="about.limits">Other browsers and other computers do not see your entries. Clearing your browser data deletes them, so set up a backup folder or export regularly.</li>
+            <li data-i18n="about.offline">Once installed, LocalLog also works without an internet connection.</li>
           </ul>
+          <button id="btnShowWelcome" type="button" class="btn btn-outline btn-sm" data-i18n="about.showWelcome">Show the welcome message again</button>
         </div>
 
-        <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; padding: 6px 0;">
-          <strong>License:</strong> MIT License • Open-Source Personal Side Project • Provided as-is without warranties.
-        </div>
+        <details class="card-section tech-details">
+          <summary data-i18n="about.techTitle">Technical details</summary>
+          <ul class="plain-list">
+            <li data-i18n="about.tech.storage">Storage: entries, customers and projects are kept in the browser's IndexedDB database "locallog".</li>
+            <li data-i18n="about.tech.backup">Backup: an optional folder (File System Access API) receives customers.csv, projects.csv, entries.csv and meta.csv. The files use UTF-8, a comma separator, ISO timestamps and decimal points.</li>
+            <li data-i18n="about.tech.network">Network: a Content Security Policy with connect-src 'none' blocks the app from sending data anywhere. The app has no external dependencies and no telemetry.</li>
+            <li data-i18n="about.tech.offline">Offline use: a service worker caches the app files. A new version is picked up automatically after an update.</li>
+            <li data-i18n="about.tech.formats">Formats: numbers, dates and times follow your browser's regional settings. The interface language can be switched in the header.</li>
+            <li><span data-i18n="about.tech.version">Version:</span> <span id="techVersion"></span></li>
+          </ul>
+        </details>
+
+        <p class="license-line" data-i18n="about.license">MIT License. A personal side project, provided as is, without warranty.</p>
       </section>
     </main>
 
-    <!-- Add / Edit Entry Dialog (WAI-ARIA Modal) -->
-    <dialog id="dlgEntry" class="modal-dialog" aria-labelledby="dlgEntryTitle" aria-modal="true">
+    <!-- Add entry -->
+    <dialog id="dlgEntry" class="modal-dialog" aria-labelledby="dlgEntryTitle">
       <form id="formEntry" method="dialog">
         <div class="modal-header">
-          <h3 id="dlgEntryTitle" class="modal-title">Add Time Entry</h3>
-          <button type="button" id="btnDlgEntryClose" class="btn-theme" style="width: 28px; height: 28px; font-size: 13px;" aria-label="Close dialog">✕</button>
+          <h3 id="dlgEntryTitle" class="modal-title" data-i18n="entry.addTitle">Add entry</h3>
+          <button type="button" id="btnDlgEntryClose" class="btn btn-ghost btn-sm" data-i18n-aria-label="dialog.close" aria-label="Close">&times;</button>
         </div>
-        
         <div class="modal-body">
-          <input type="hidden" id="dlgEntryId" value="">
-          
           <div class="form-group">
-            <label for="dlgEntryProject">Project / Category *</label>
-            <select id="dlgEntryProject" class="form-select" required>
-              <!-- Populated dynamically -->
-            </select>
+            <label for="dlgEntryProject" data-i18n="entry.project">Customer / Project</label>
+            <select id="dlgEntryProject" class="form-select" required></select>
           </div>
-
           <div class="form-group">
-            <label for="dlgEntryDate">Date *</label>
+            <label for="dlgEntryDate" data-i18n="col.date">Date</label>
             <input type="date" id="dlgEntryDate" class="form-input" required>
           </div>
-
           <div class="form-row">
             <div class="form-group">
-              <label for="dlgEntryStartTime">Start Time *</label>
-              <input type="time" id="dlgEntryStartTime" class="form-input" step="60" required>
+              <label for="dlgEntryStart" data-i18n="col.start">Start</label>
+              <input type="time" id="dlgEntryStart" class="form-input" step="60" required>
             </div>
             <div class="form-group">
-              <label for="dlgEntryEndTime">End Time *</label>
-              <input type="time" id="dlgEntryEndTime" class="form-input" step="60" required>
+              <label for="dlgEntryEnd" data-i18n="col.end">End</label>
+              <input type="time" id="dlgEntryEnd" class="form-input" step="60" required>
             </div>
           </div>
-
-          <div id="dlgDurationPreview" class="duration-preview">
-            Calculated Duration: <strong>00:00:00 (0,00 h)</strong>
-          </div>
-
+          <div id="dlgDurationPreview" class="duration-preview" aria-live="polite"></div>
           <div class="form-group">
-            <label for="dlgEntryNote">Work Block Note / Description</label>
-            <input type="text" id="dlgEntryNote" class="form-input" placeholder="e.g. Budget spreadsheet updates, sync...">
+            <label for="dlgEntryTicket" data-i18n="entry.ticket">Ticket (optional)</label>
+            <input type="text" id="dlgEntryTicket" class="form-input" maxlength="60" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="dlgEntryNote" data-i18n="col.note">Note</label>
+            <input type="text" id="dlgEntryNote" class="form-input" maxlength="500" autocomplete="off">
           </div>
         </div>
-
         <div class="modal-footer">
-          <button type="button" id="btnDlgEntryCancel" class="btn btn-secondary">Cancel</button>
-          <button type="submit" id="btnDlgEntrySave" class="btn btn-primary">Save Entry</button>
+          <button type="button" id="btnDlgEntryCancel" class="btn btn-secondary" data-i18n="dialog.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="dialog.save">Save</button>
         </div>
       </form>
     </dialog>
 
-    <!-- App Footer -->
+    <!-- Customer -->
+    <dialog id="dlgCustomer" class="modal-dialog" aria-labelledby="dlgCustomerTitle">
+      <form id="formCustomer" method="dialog">
+        <div class="modal-header">
+          <h3 id="dlgCustomerTitle" class="modal-title"></h3>
+          <button type="button" id="btnDlgCustomerClose" class="btn btn-ghost btn-sm" data-i18n-aria-label="dialog.close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="dlgCustomerId">
+          <div class="form-group">
+            <label for="dlgCustomerName" data-i18n="catalog.name">Name</label>
+            <input type="text" id="dlgCustomerName" class="form-input" maxlength="120" required autocomplete="off">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="dlgCustomerColor" data-i18n="catalog.color">Colour</label>
+              <input type="color" id="dlgCustomerColor" class="form-input form-color" value="#0078D4">
+            </div>
+            <div class="form-group">
+              <label for="dlgCustomerRate" data-i18n="catalog.defaultRateLabel">Default hourly rate (EUR, optional)</label>
+              <input type="text" id="dlgCustomerRate" class="form-input" inputmode="decimal" autocomplete="off">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="btnDlgCustomerCancel" class="btn btn-secondary" data-i18n="dialog.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="dialog.save">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Project -->
+    <dialog id="dlgProject" class="modal-dialog" aria-labelledby="dlgProjectTitle">
+      <form id="formProject" method="dialog">
+        <div class="modal-header">
+          <h3 id="dlgProjectTitle" class="modal-title"></h3>
+          <button type="button" id="btnDlgProjectClose" class="btn btn-ghost btn-sm" data-i18n-aria-label="dialog.close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="dlgProjectId">
+          <div class="form-group">
+            <label for="dlgProjectCustomer" data-i18n="catalog.customer">Customer</label>
+            <select id="dlgProjectCustomer" class="form-select" required></select>
+          </div>
+          <div class="form-group">
+            <label for="dlgProjectName" data-i18n="catalog.name">Name</label>
+            <input type="text" id="dlgProjectName" class="form-input" maxlength="120" required autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="dlgProjectRate" data-i18n="catalog.rateLabel">Hourly rate (EUR, optional)</label>
+            <input type="text" id="dlgProjectRate" class="form-input" inputmode="decimal" autocomplete="off">
+            <span class="field-hint" data-i18n="catalog.rateHint">Leave empty to use the customer's default rate.</span>
+          </div>
+          <div class="form-group">
+            <label for="dlgProjectTemplate" data-i18n="catalog.templateLabel">Ticket link (optional)</label>
+            <input type="text" id="dlgProjectTemplate" class="form-input" autocomplete="off" placeholder="https://example.com/browse/{ticket}">
+            <span class="field-hint" data-i18n="catalog.templateHint">Must start with https://. {ticket} is replaced by the ticket number, so ticket numbers become links.</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="btnDlgProjectCancel" class="btn btn-secondary" data-i18n="dialog.cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" data-i18n="dialog.save">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Welcome -->
+    <dialog id="dlgWelcome" class="modal-dialog" aria-labelledby="dlgWelcomeTitle">
+      <div class="modal-header">
+        <h3 id="dlgWelcomeTitle" class="modal-title" data-i18n="welcome.title">Welcome to LocalLog</h3>
+      </div>
+      <div class="modal-body">
+        <ul class="plain-list">
+          <li data-i18n="welcome.1">Your data stays only in this browser on this computer.</li>
+          <li data-i18n="welcome.2">Other browsers and other computers will not see it.</li>
+          <li data-i18n="welcome.3">If you clear your browser data, your entries are deleted.</li>
+          <li data-i18n="welcome.4">Set up a backup folder, or export your entries regularly.</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="btnWelcomeFolder" class="btn btn-secondary" data-i18n="welcome.folder">Choose backup folder</button>
+        <button type="button" id="btnWelcomeOk" class="btn btn-primary" data-i18n="welcome.ok">Got it</button>
+      </div>
+    </dialog>
+
+    <!-- Folder already contains a backup -->
+    <dialog id="dlgFolderChoice" class="modal-dialog" aria-labelledby="dlgFolderChoiceTitle">
+      <form method="dialog">
+        <div class="modal-header">
+          <h3 id="dlgFolderChoiceTitle" class="modal-title" data-i18n="folder.choiceTitle">This folder already has a backup</h3>
+        </div>
+        <div class="modal-body">
+          <p data-i18n="folder.choiceText">The folder contains LocalLog files. What should happen?</p>
+        </div>
+        <div class="modal-footer modal-footer-stack">
+          <button type="submit" value="load" class="btn btn-primary" data-i18n="folder.load">Load data from this folder</button>
+          <button type="submit" value="replace" class="btn btn-secondary" data-i18n="folder.replace">Replace folder files with data from this browser</button>
+          <button type="submit" value="cancel" class="btn btn-ghost" data-i18n="dialog.cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
     <footer class="footer">
-      <span>LocalLog v2.0 (PWA) • Austrian Locale (de-AT) • Light Theme Default</span>
-      <span>100% Local-First • WCAG 2.2 Level AA Keyboard Accessible</span>
+      <span id="footerVersion"></span>
+      <span data-i18n="app.tagline">Your data stays on this computer</span>
     </footer>
 
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </div>
 
   <script type="module" src="./js/app.js"></script>

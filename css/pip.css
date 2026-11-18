@@ -1,0 +1,57 @@
+/* Styles for the mini window (loaded into the floating window via a <link> element). */
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+
+body {
+  background: #111827;
+  color: #F9FAFB;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  height: 100vh;
+  user-select: none;
+  overflow: hidden;
+}
+
+[hidden] { display: none !important; }
+
+.mini-main { display: flex; align-items: center; gap: 10px; }
+
+.mini-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9CA3AF;
+  border: 2px solid #FFFFFF;
+  flex-shrink: 0;
+}
+
+.mini-info { display: flex; flex-direction: column; }
+
+.mini-time {
+  font-size: 20px;
+  font-weight: 700;
+  font-family: Consolas, monospace;
+  letter-spacing: 0.5px;
+}
+
+.mini-project {
+  font-size: 11px;
+  color: #9CA3AF;
+  max-width: 110px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-btn {
+  background: #1F2937;
+  border: 1px solid #374151;
+  color: #FFFFFF;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mini-btn:hover { background: #374151; }

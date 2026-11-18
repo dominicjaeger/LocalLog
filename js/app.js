@@ -1,686 +1,408 @@
-// LocalLog - Main Application Controller (WCAG 2.2 Accessible, Fluent 2 Bento, Light Mode Default)
+// LocalLog - main controller: start-up, timer controls, header, tabs, shortcuts, PWA.
 
-import { formatDuration, generateTsvForExcel, formatHoursAT } from './csv.js';
-import {
-  initStorage,
-  getProjects,
-  saveProject,
-  deleteProject,
-  getEntries,
-  saveEntry,
-  deleteEntry,
-  resetToDefaultProjects,
-  hasFileSystemSupport,
-  isFolderBound,
-  getBoundFolderName,
-  bindLocalDirectory,
-  downloadCsvFiles,
-  getSetting,
-  setSetting
-} from './storage.js';
+import { APP_VERSION } from './version.js';
+import { t, detectLanguage, setLanguage, getLanguage } from './i18n.js';
+import { initStorage, getSetting, setSetting } from './storage.js';
+import { state, loadSettings, saveSetting, refreshData, watchDatabase, onData } from './state.js';
+import { initBackup, requestPersistence } from './backup.js';
 import { TimerEngine } from './timer.js';
 import { AmbientManager } from './ambient.js';
+import { formatClock } from './core/time.js';
+import { formatTime, formatRate } from './core/format.js';
+import { effectiveRate } from './core/export.js';
+import { setIcon, setColor, toast, errorText } from './ui/dom.js';
+import { fillProjectSelect } from './ui/picker.js';
+import { renderEntries, initEntries, tickEntries } from './ui/entries.js';
+import { renderCatalog, initCatalog } from './ui/catalog.js';
+import { renderWeekly, initWeekly } from './ui/weekly.js';
+import { renderStatus, initStatus, maybeShowWelcome } from './ui/status.js';
+import { copyTable } from './ui/export.js';
 
-let timerEngine = null;
-let ambientManager = null;
-let deferredPrompt = null;
-let includeRates = false;
+const $ = (id) => document.getElementById(id);
+
+let timer = null;
+let ambient = null;
+let deferredInstallPrompt = null;
 let currentTheme = 'light';
+let switchTimeout = null;
+let noteTimeout = null;
 
-// DOM Elements
-const el = {
-  stopwatch: document.getElementById('txtStopwatch'),
-  activeRateHint: document.getElementById('txtActiveRateHint'),
-  todaySummary: document.getElementById('txtTodaySummary'),
-  todayEntriesCount: document.getElementById('txtTodayEntriesCount'),
-  folderMiniStatus: document.getElementById('txtFolderMiniStatus'),
-  cmbActiveProjects: document.getElementById('cmbActiveProjects'),
-  txtQuickNote: document.getElementById('txtQuickNote'),
-  btnStartPause: document.getElementById('btnStartPause'),
-  btnStop: document.getElementById('btnStop'),
-  orbDot: document.getElementById('orbDot'),
-
-  // Entries
-  btnAddEntryManual: document.getElementById('btnAddEntryManual'),
-  btnCopyTsv: document.getElementById('btnCopyTsv'),
-  chkIncludeRates: document.getElementById('chkIncludeRates'),
-  txtCopyFeedback: document.getElementById('txtCopyFeedback'),
-  tbodyEntries: document.getElementById('tbodyEntries'),
-  colHeaderRate: document.getElementById('colHeaderRate'),
-  colHeaderValue: document.getElementById('colHeaderValue'),
-
-  // Manual Entry Dialog
-  dlgEntry: document.getElementById('dlgEntry'),
-  formEntry: document.getElementById('formEntry'),
-  dlgEntryTitle: document.getElementById('dlgEntryTitle'),
-  dlgEntryId: document.getElementById('dlgEntryId'),
-  dlgEntryProject: document.getElementById('dlgEntryProject'),
-  dlgEntryDate: document.getElementById('dlgEntryDate'),
-  dlgEntryStartTime: document.getElementById('dlgEntryStartTime'),
-  dlgEntryEndTime: document.getElementById('dlgEntryEndTime'),
-  dlgDurationPreview: document.getElementById('dlgDurationPreview'),
-  dlgEntryNote: document.getElementById('dlgEntryNote'),
-  btnDlgEntryClose: document.getElementById('btnDlgEntryClose'),
-  btnDlgEntryCancel: document.getElementById('btnDlgEntryCancel'),
-
-  // Projects
-  formNewProject: document.getElementById('formNewProject'),
-  txtProjectName: document.getElementById('txtProjectName'),
-  colorProject: document.getElementById('colorProject'),
-  txtProjectRate: document.getElementById('txtProjectRate'),
-  tbodyProjects: document.getElementById('tbodyProjects'),
-  btnResetProjects: document.getElementById('btnResetProjects'),
-
-  // Ambient & Sync
-  btnTogglePip: document.getElementById('btnTogglePip'),
-  pipSupportAlert: document.getElementById('pipSupportAlert'),
-  btnTestNotification: document.getElementById('btnTestNotification'),
-  btnBindFolder: document.getElementById('btnBindFolder'),
-  txtFolderStatus: document.getElementById('txtFolderStatus'),
-  btnManualDownload: document.getElementById('btnManualDownload'),
-  btnToggleTheme: document.getElementById('btnToggleTheme'),
-
-  // PWA Install & Offline
-  bannerInstall: document.getElementById('bannerInstall'),
-  btnInstallPwa: document.getElementById('btnInstallPwa'),
-  bannerCheckIn: document.getElementById('bannerCheckIn'),
-  txtCheckInMsg: document.getElementById('txtCheckInMsg'),
-  btnCheckInKeep: document.getElementById('btnCheckInKeep'),
-  btnCheckInSwitch: document.getElementById('btnCheckInSwitch')
-};
+// ---------------------------------------------------------------------------
+// Start-up
+// ---------------------------------------------------------------------------
 
 async function init() {
-  setupTheme();
-  await initStorage();
-  timerEngine = new TimerEngine();
-  ambientManager = new AmbientManager(timerEngine);
-
-  includeRates = (await getSetting('includeRates', false)) === true;
-  el.chkIncludeRates.checked = includeRates;
-  updateRateColumnsVisibility();
-
-  setupEventListeners();
-  setupAccessibleTabs();
-  setupKeyboardShortcuts();
+  // Show the right language straight away; the saved choice is applied once the database is open.
+  setLanguage(detectLanguage());
+  $('appVersion').textContent = `v${APP_VERSION}`;
+  $('footerVersion').textContent = `LocalLog v${APP_VERSION}`;
+  $('techVersion').textContent = APP_VERSION;
+  setupTabs();
   setupPwa();
 
-  await refreshAll();
-
-  // Check PiP support
-  if (!ambientManager.isPipSupported()) {
-    el.btnTogglePip.disabled = true;
-    el.btnTogglePip.title = 'Document Picture-in-Picture is only supported in Chromium browsers (Chrome/Edge)';
-    el.pipSupportAlert.style.display = 'block';
-  }
-
-  updateFolderSyncStatus();
-}
-
-// ==============================================================================
-// THEME MANAGEMENT (Light Mode Preferred by Default)
-// ==============================================================================
-function setupTheme() {
-  const saved = localStorage.getItem('locallog_theme');
-  currentTheme = saved === 'dark' ? 'dark' : 'light';
-  applyTheme(currentTheme);
-
-  el.btnToggleTheme.addEventListener('click', () => {
-    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    localStorage.setItem('locallog_theme', currentTheme);
-    applyTheme(currentTheme);
-  });
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  el.btnToggleTheme.textContent = theme === 'dark' ? '🌙' : '☀️';
-  el.btnToggleTheme.setAttribute('aria-label', `Current theme: ${theme}. Click to switch.`);
-}
-
-function updateRateColumnsVisibility() {
-  el.colHeaderRate.style.display = includeRates ? '' : 'none';
-  el.colHeaderValue.style.display = includeRates ? '' : 'none';
-}
-
-function updateFolderSyncStatus() {
-  if (isFolderBound()) {
-    const name = getBoundFolderName();
-    el.txtFolderStatus.innerHTML = `Active Local Sync: <strong>${escapeHtml(name)}</strong> (Direct 2-way CSV)`;
-    el.folderMiniStatus.textContent = `Disk: ${name}`;
-    el.btnBindFolder.textContent = 'Change Synced Folder';
-  } else if (!hasFileSystemSupport()) {
-    el.txtFolderStatus.textContent = 'File System Access API not available in this browser. Use manual CSV export.';
-    el.folderMiniStatus.textContent = 'IndexedDB Only';
-    el.btnBindFolder.style.display = 'none';
-  } else {
-    el.txtFolderStatus.textContent = 'No local folder linked. Click to enable 2-way disk sync.';
-    el.folderMiniStatus.textContent = 'IndexedDB (Offline)';
-    el.btnBindFolder.textContent = 'Link Local Folder';
-  }
-}
-
-async function refreshAll() {
-  await Promise.all([refreshProjects(), refreshEntries()]);
-}
-
-async function refreshProjects() {
-  const projects = await getProjects();
-  const activeProjects = projects.filter(p => Number(p.isActive) === 1);
-
-  const currentVal = el.cmbActiveProjects.value;
-  el.cmbActiveProjects.innerHTML = '';
-
-  if (activeProjects.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = '-- No Active Projects (Create one below) --';
-    el.cmbActiveProjects.appendChild(opt);
-  } else {
-    for (const p of activeProjects) {
-      const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = `${p.name} (${p.colorHex})`;
-      el.cmbActiveProjects.appendChild(opt);
-    }
-  }
-
-  if (currentVal && activeProjects.some(p => String(p.id) === String(currentVal))) {
-    el.cmbActiveProjects.value = currentVal;
-  }
-
-  el.tbodyProjects.innerHTML = '';
-  for (const p of projects) {
-    const tr = document.createElement('tr');
-    const isActive = Number(p.isActive) === 1;
-
-    tr.innerHTML = `
-      <td>
-        <span class="color-badge" style="background-color: ${p.colorHex};"></span>
-        <strong>${escapeHtml(p.name)}</strong>
-      </td>
-      <td>€ ${p.hourlyRate.toFixed(2)}/h</td>
-      <td>
-        <span class="status-pill ${isActive ? 'pill-active' : 'pill-inactive'}">
-          ${isActive ? 'Active' : 'Deactivated'}
-        </span>
-      </td>
-      <td style="text-align: right;">
-        <button class="btn btn-sm btn-secondary btn-toggle-act" data-id="${p.id}" aria-label="${isActive ? 'Deactivate' : 'Activate'} ${escapeHtml(p.name)}">
-          ${isActive ? 'Deactivate' : 'Activate'}
-        </button>
-        <button class="btn btn-sm btn-danger btn-del-proj" data-id="${p.id}" style="margin-left: 6px;" aria-label="Delete ${escapeHtml(p.name)}">
-          Delete
-        </button>
-      </td>
-    `;
-    el.tbodyProjects.appendChild(tr);
-  }
-
-  el.tbodyProjects.querySelectorAll('.btn-toggle-act').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const id = Number(btn.getAttribute('data-id'));
-      const proj = projects.find(p => p.id === id);
-      if (proj) {
-        proj.isActive = proj.isActive === 1 ? 0 : 1;
-        await saveProject(proj);
-        await refreshAll();
-      }
-    });
-  });
-
-  el.tbodyProjects.querySelectorAll('.btn-del-proj').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const id = Number(btn.getAttribute('data-id'));
-      const entries = await getEntries();
-      const hasEntries = entries.some(e => e.projectId === id);
-      if (hasEntries) {
-        alert('This project has logged time entries. Deactivate it instead of deleting.');
-        return;
-      }
-      if (confirm('Are you sure you want to delete this project?')) {
-        await deleteProject(id);
-        await refreshAll();
-      }
-    });
-  });
-}
-
-// ==============================================================================
-// DATE / TIME HELPERS & MANUAL ENTRY MODAL CONTROLLER
-// ==============================================================================
-function toLocalDateInputValue(d) {
-  if (!(d instanceof Date) || isNaN(d)) d = new Date(d);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function toLocalTimeInputValue(d) {
-  if (!(d instanceof Date) || isNaN(d)) d = new Date(d);
-  const hours = String(d.getHours()).padStart(2, '0');
-  const mins = String(d.getMinutes()).padStart(2, '0');
-  return `${hours}:${mins}`;
-}
-
-function updateDurationPreview() {
-  const dateVal = el.dlgEntryDate.value;
-  const startVal = el.dlgEntryStartTime.value;
-  const endVal = el.dlgEntryEndTime.value;
-
-  if (!dateVal || !startVal || !endVal) {
-    el.dlgDurationPreview.innerHTML = 'Calculated Duration: <em>Please enter start and end time</em>';
-    return 0;
-  }
-
-  const [y, m, d] = dateVal.split('-').map(Number);
-  const [sh, sm] = startVal.split(':').map(Number);
-  const [eh, em] = endVal.split(':').map(Number);
-
-  const startDt = new Date(y, m - 1, d, sh, sm, 0, 0);
-  let endDt = new Date(y, m - 1, d, eh, em, 0, 0);
-
-  let diffSecs = Math.round((endDt.getTime() - startDt.getTime()) / 1000);
-  if (diffSecs <= 0) {
-    el.dlgDurationPreview.innerHTML = '<span style="color: var(--danger); font-weight: 600;">⚠️ End time must be after start time</span>';
-    return -1;
-  }
-
-  const hours = Math.round((diffSecs / 3600.0) * 100) / 100;
-  const durStr = formatDuration(diffSecs);
-  const hoursStr = formatHoursAT(hours);
-  el.dlgDurationPreview.innerHTML = `Calculated Duration: <strong>${durStr} (${hoursStr} h)</strong>`;
-  return diffSecs;
-}
-
-async function populateDialogProjects(selectedId = null) {
-  const projects = await getProjects();
-  el.dlgEntryProject.innerHTML = '';
-  for (const p of projects) {
-    const opt = document.createElement('option');
-    opt.value = p.id;
-    opt.textContent = `${p.name} ${Number(p.isActive) === 1 ? '' : '(Deactivated)'}`;
-    if (selectedId && Number(selectedId) === Number(p.id)) {
-      opt.selected = true;
-    }
-    el.dlgEntryProject.appendChild(opt);
-  }
-}
-
-async function openAddEntryDialog() {
-  const projects = await getProjects();
-  if (!projects || projects.length === 0) {
-    alert('Please create a project first before logging time entries.');
+  try {
+    await initStorage();
+  } catch (err) {
+    console.error(err);
+    $('bannerPrivate').querySelector('span').textContent = t('err.storage');
+    $('bannerPrivate').hidden = false;
     return;
   }
 
-  el.dlgEntryId.value = '';
-  el.dlgEntryTitle.textContent = 'Add Time Entry';
+  const savedLanguage = await getSetting('language', null);
+  setLanguage(savedLanguage || detectLanguage());
+  currentTheme = (await getSetting('theme', 'light')) === 'dark' ? 'dark' : 'light';
+  await loadSettings();
+  await refreshData();
+  watchDatabase();
 
-  const now = new Date();
-  const oneHourAgo = new Date(now.getTime() - 3600 * 1000);
+  timer = new TimerEngine();
+  timer.setCheckInMinutes(state.settings.checkInMinutes);
+  ambient = new AmbientManager(timer);
 
-  el.dlgEntryDate.value = toLocalDateInputValue(now);
-  el.dlgEntryStartTime.value = toLocalTimeInputValue(oneHourAgo);
-  el.dlgEntryEndTime.value = toLocalTimeInputValue(now);
-  el.dlgEntryNote.value = '';
+  initEntries(() => $('cmbProjects').value);
+  initCatalog();
+  initWeekly();
+  initStatus({ onDataReplaced: reloadTimer });
+  setupHeader();
+  setupTimerControls();
+  setupSettings();
+  setupShortcuts();
 
-  const activeProjVal = el.cmbActiveProjects.value || (projects[0] ? projects[0].id : null);
-  await populateDialogProjects(activeProjVal);
-  updateDurationPreview();
-  el.dlgEntry.showModal();
+  onData(renderAll);
+  document.addEventListener('rates-toggled', renderAll);
+  await initBackup();
+  renderAll();
+  await reloadTimer();
+  maybeShowWelcome();
 }
 
-async function openEditEntryDialog(entryId) {
-  const entries = await getEntries();
-  const entry = entries.find(e => e.id === Number(entryId));
-  if (!entry) return;
-
-  el.dlgEntryId.value = entry.id;
-  el.dlgEntryTitle.textContent = 'Edit Time Entry';
-
-  const startDt = new Date(entry.startTime);
-  const endDt = new Date(entry.endTime);
-
-  el.dlgEntryDate.value = toLocalDateInputValue(startDt);
-  el.dlgEntryStartTime.value = toLocalTimeInputValue(startDt);
-  el.dlgEntryEndTime.value = toLocalTimeInputValue(endDt);
-  el.dlgEntryNote.value = entry.note || '';
-
-  await populateDialogProjects(entry.projectId);
-  updateDurationPreview();
-  el.dlgEntry.showModal();
+function renderAll() {
+  renderPicker();
+  renderEntries();
+  renderWeekly();
+  renderCatalog();
+  renderStatus();
+  updateTimerView(timer.getState());
 }
 
-async function handleDeleteEntry(entryId) {
-  const entries = await getEntries();
-  const entry = entries.find(e => e.id === Number(entryId));
-  if (!entry) return;
+// ---------------------------------------------------------------------------
+// Header: language, theme, mini window
+// ---------------------------------------------------------------------------
 
-  const desc = `Delete entry "${entry.projectName}" on ${entry.dateDisplay} (${entry.timeRange}, ${entry.durationDisplay})?`;
-  if (confirm(desc)) {
-    await deleteEntry(entryId);
-    await refreshAll();
+function setupHeader() {
+  const updateLanguageButtons = () => {
+    for (const btn of document.querySelectorAll('.lang-btn')) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.lang === getLanguage()));
+    }
+  };
+  updateLanguageButtons();
+  for (const btn of document.querySelectorAll('.lang-btn')) {
+    btn.addEventListener('click', async () => {
+      setLanguage(btn.dataset.lang);
+      await setSetting('language', btn.dataset.lang);
+      updateLanguageButtons();
+      applyTheme();
+      updatePipButtons(ambient.isPipActive());
+      renderAll();
+    });
+  }
+
+  applyTheme();
+  $('btnToggleTheme').addEventListener('click', async () => {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    await setSetting('theme', currentTheme);
+    applyTheme();
+  });
+
+  if (ambient.isPipSupported()) {
+    $('btnTogglePip').hidden = false;
+    $('pipCard').hidden = false;
+    updatePipButtons(false);
+    const toggle = async () => updatePipButtons(await ambient.togglePip());
+    $('btnTogglePip').addEventListener('click', toggle);
+    $('btnTogglePipSettings').addEventListener('click', toggle);
+    window.addEventListener('pip-opened', () => updatePipButtons(true));
+    window.addEventListener('pip-closed', () => updatePipButtons(false));
   }
 }
 
-async function refreshEntries() {
-  const entries = await getEntries();
-  el.tbodyEntries.innerHTML = '';
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  const button = $('btnToggleTheme');
+  setIcon(button, currentTheme === 'dark' ? 'sun' : 'moon');
+  const label = t(currentTheme === 'dark' ? 'header.theme.dark' : 'header.theme.light');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
 
-  const todayStr = new Intl.DateTimeFormat('de-AT', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
-  let todayTotalHours = 0.0;
-  let todayBlocksCount = 0;
+function updatePipButtons(active) {
+  const label = t(active ? 'mini.close' : 'mini.open');
+  const header = $('btnTogglePip');
+  setIcon(header, 'miniwindow');
+  header.title = label;
+  header.setAttribute('aria-label', label);
+  $('btnTogglePipSettings').textContent = label;
+}
 
-  if (entries.length === 0) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="${includeRates ? 9 : 7}" style="text-align: center; color: var(--text-muted); padding: 28px;">No logged entries yet. Start a project timer above or add an entry manually!</td>`;
-    el.tbodyEntries.appendChild(tr);
+// ---------------------------------------------------------------------------
+// Timer
+// ---------------------------------------------------------------------------
+
+function renderPicker() {
+  const select = $('cmbProjects');
+  const keep = select.value || state.settings.lastProjectId;
+  fillProjectSelect(select, keep);
+  // While a timer is active the picker shows the active project.
+  const active = timer && timer.getState().project;
+  if (active && select.querySelector(`option[value="${active.id}"]`)) select.value = String(active.id);
+}
+
+function updateTimerView(s) {
+  $('txtStopwatch').textContent = formatClock(s.elapsedSeconds || 0);
+  const orb = $('orbDot');
+  const start = $('btnStartPause');
+  const hint = $('txtActiveHint');
+  const name = s.project && s.customer ? t('timer.running', { customer: s.customer.name, project: s.project.name }) : '';
+
+  if (s.isRunning && s.project) {
+    start.textContent = t('timer.pause');
+    $('btnStop').disabled = false;
+    const rate = effectiveRate(s.project, s.customer);
+    hint.textContent = name + (state.settings.includeRates && rate !== null ? ` · ${formatRate(rate)}` : '');
+    setColor(orb, s.colorHex || '#0078D4');
+    orb.classList.add('orb-pulse');
+  } else if (s.isPaused) {
+    start.textContent = t('timer.resume');
+    $('btnStop').disabled = false;
+    hint.textContent = t('timer.paused');
+    setColor(orb, '#F59E0B');
+    orb.classList.remove('orb-pulse');
   } else {
-    for (const e of entries) {
-      if (e.dateDisplay === todayStr) {
-        todayTotalHours += e.hoursDecimal;
-        todayBlocksCount++;
-      }
-
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${e.dateDisplay}</td>
-        <td>${e.timeRange}</td>
-        <td>
-          <span class="color-badge" style="background-color: ${e.colorHex};"></span>
-          ${escapeHtml(e.projectName)}
-        </td>
-        <td><code>${e.durationDisplay}</code></td>
-        <td><strong>${e.hoursDisplay}</strong></td>
-        ${includeRates ? `<td>${e.rateDisplay}</td><td>${e.valueDisplay}</td>` : ''}
-        <td>${escapeHtml(e.note)}</td>
-        <td style="text-align: right; white-space: nowrap;">
-          <button class="btn btn-sm btn-secondary btn-entry-edit" data-id="${e.id}" title="Edit entry" aria-label="Edit entry ${e.id}">✏️ Edit</button>
-          <button class="btn btn-sm btn-danger btn-entry-del" data-id="${e.id}" title="Delete entry" aria-label="Delete entry ${e.id}" style="margin-left: 4px;">🗑️</button>
-        </td>
-      `;
-      el.tbodyEntries.appendChild(tr);
-    }
-
-    el.tbodyEntries.querySelectorAll('.btn-entry-edit').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = Number(btn.getAttribute('data-id'));
-        openEditEntryDialog(id);
-      });
-    });
-
-    el.tbodyEntries.querySelectorAll('.btn-entry-del').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const id = Number(btn.getAttribute('data-id'));
-        handleDeleteEntry(id);
-      });
-    });
+    start.textContent = t('timer.start');
+    $('btnStop').disabled = true;
+    hint.textContent = t('timer.noneActive');
+    setColor(orb, '#9CA3AF');
+    orb.classList.remove('orb-pulse');
   }
-
-  el.todaySummary.textContent = `${todayTotalHours.toFixed(2).replace('.', ',')} h`;
-  el.todayEntriesCount.textContent = `${todayBlocksCount} time block${todayBlocksCount === 1 ? '' : 's'} logged today`;
-}
-
-function setupEventListeners() {
-  timerEngine.on('tick', (state) => {
-    el.stopwatch.textContent = formatDuration(state.elapsedSeconds || 0);
-  });
-
-  timerEngine.on('stateChange', (state) => {
-    el.stopwatch.textContent = formatDuration(state.elapsedSeconds || 0);
-    if (state.isRunning && state.activeProject) {
-      el.btnStartPause.textContent = 'Pause';
-      el.btnStartPause.className = 'btn btn-primary';
-      el.btnStop.disabled = false;
-      el.activeRateHint.textContent = `${state.activeProject.name} • Internal rate: € ${state.activeProject.hourlyRate.toFixed(2)}/h`;
-      el.orbDot.style.backgroundColor = state.activeProject.colorHex;
-      el.orbDot.classList.add('orb-pulse');
-    } else if (state.isPaused && state.activeProject) {
-      el.btnStartPause.textContent = 'Resume';
-      el.btnStartPause.className = 'btn btn-primary';
-      el.btnStop.disabled = false;
-      el.activeRateHint.textContent = `Paused: ${state.activeProject.name}`;
-      el.orbDot.style.backgroundColor = '#F59E0B';
-      el.orbDot.classList.remove('orb-pulse');
-    } else {
-      el.btnStartPause.textContent = 'Start';
-      el.btnStartPause.className = 'btn btn-primary';
-      el.btnStop.disabled = true;
-      el.activeRateHint.textContent = 'No timer active';
-      el.orbDot.style.backgroundColor = '#9CA3AF';
-      el.orbDot.classList.remove('orb-pulse');
-    }
-  });
-
-  el.btnStartPause.addEventListener('click', toggleTimer);
-
-  el.btnStop.addEventListener('click', async () => {
-    await timerEngine.stop();
-    el.txtQuickNote.value = '';
-    await refreshEntries();
-  });
-
-  el.btnCopyTsv.addEventListener('click', copyTsvForExcel);
-
-  el.chkIncludeRates.addEventListener('change', async (e) => {
-    includeRates = e.target.checked;
-    await setSetting('includeRates', includeRates);
-    updateRateColumnsVisibility();
-    await refreshEntries();
-  });
-
-  el.formNewProject.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = el.txtProjectName.value.trim();
-    const colorHex = el.colorProject.value;
-    const rate = parseFloat(el.txtProjectRate.value.replace(',', '.')) || 0.0;
-    if (!name) return;
-
-    await saveProject({
-      name,
-      colorHex,
-      hourlyRate: rate,
-      isActive: 1
-    });
-
-    el.txtProjectName.value = '';
-    el.txtProjectRate.value = '85,00';
-    await refreshAll();
-  });
-
-  el.btnTogglePip.addEventListener('click', async () => {
-    const isOpen = await ambientManager.togglePip();
-    updatePipButtonLabel(isOpen);
-  });
-
-  window.addEventListener('pip-opened', () => updatePipButtonLabel(true));
-  window.addEventListener('pip-closed', () => updatePipButtonLabel(false));
-
-  function updatePipButtonLabel(isActive) {
-    el.btnTogglePip.textContent = isActive ? '✕ Close Floating Orb' : '🗔 Floating Orb (PiP)';
-    el.btnTogglePip.className = isActive ? 'btn btn-secondary btn-sm' : 'btn btn-outline btn-sm';
-  }
-
-  el.btnTestNotification.addEventListener('click', async () => {
-    const hasPerm = await ambientManager.requestNotificationPermission();
-    if (!hasPerm) {
-      alert('Notification permissions are blocked in your browser settings.');
-      return;
-    }
-    ambientManager.triggerCheckInPrompt(timerEngine.getState());
-  });
-
-  window.addEventListener('in-app-checkin', (e) => {
-    el.txtCheckInMsg.textContent = `30-Minute Check-in: Still working on "${e.detail.projName}" (${e.detail.timeStr})?`;
-    el.bannerCheckIn.style.display = 'flex';
-  });
-
-  el.btnCheckInKeep.addEventListener('click', () => {
-    timerEngine.resetCheckIn();
-    el.bannerCheckIn.style.display = 'none';
-  });
-
-  el.btnCheckInSwitch.addEventListener('click', () => {
-    timerEngine.resetCheckIn();
-    el.bannerCheckIn.style.display = 'none';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  });
-
-  el.btnBindFolder.addEventListener('click', async () => {
-    try {
-      const folderName = await bindLocalDirectory();
-      updateFolderSyncStatus();
-      alert(`Local folder linked: "${folderName}"\nprojects.csv and entries.csv are now synchronized directly to disk!`);
-    } catch (err) {
-      if (err.name !== 'AbortError') alert(err.message);
-    }
-  });
-
-  el.btnManualDownload.addEventListener('click', async () => {
-    await downloadCsvFiles();
-  });
 }
 
 async function toggleTimer() {
-  const state = timerEngine.getState();
-  if (state.isRunning) {
-    await timerEngine.pause();
-  } else if (state.isPaused) {
-    timerEngine.resume();
-  } else {
-    const projId = el.cmbActiveProjects.value;
-    if (!projId) {
-      alert('Please create or select an active project first.');
-      return;
+  const s = timer.getState();
+  try {
+    if (s.isRunning) {
+      await timer.pause();
+    } else if (s.isPaused) {
+      await timer.resume();
+    } else {
+      const projectId = $('cmbProjects').value;
+      if (!projectId) {
+        toast(t('timer.needProject'), 'warning');
+        return;
+      }
+      await timer.start(projectId, $('txtQuickNote').value, $('txtTicket').value);
+      await saveSetting('lastProjectId', Number(projectId));
+      requestPersistence();
     }
-    await timerEngine.start(projId, el.txtQuickNote.value);
+  } catch (err) {
+    console.error(err);
+    toast(errorText('startFailed'), 'error');
   }
 }
 
-async function copyTsvForExcel() {
-  const entries = await getEntries();
-  if (entries.length === 0) {
-    el.txtCopyFeedback.textContent = 'No entries to copy!';
-    return;
-  }
-  const tsv = generateTsvForExcel(entries, includeRates);
-  await navigator.clipboard.writeText(tsv);
-  el.txtCopyFeedback.textContent = `✓ Copied ${entries.length} rows to clipboard! Ready to paste into Excel.`;
-  setTimeout(() => {
-    el.txtCopyFeedback.textContent = '';
-  }, 4000);
+async function stopTimer(endIso = null) {
+  await timer.stop(endIso);
+  $('txtQuickNote').value = '';
+  $('txtTicket').value = '';
+  $('bannerCheckIn').hidden = true;
+  $('bannerRecover').hidden = true;
 }
 
-// ==============================================================================
-// WAI-ARIA ACCESSIBLE TABS (Keyboard Arrows, Home, End)
-// ==============================================================================
-function setupAccessibleTabs() {
+/** Picks up a running timer from the database and, if there is one, asks what to do with it. */
+async function reloadTimer() {
+  const entry = await timer.load();
+  if (!entry) return;
+  $('txtQuickNote').value = entry.note || '';
+  $('txtTicket').value = entry.ticket || '';
+  renderPicker();
+  $('txtRecoverMsg').textContent = t('recover.msg', {
+    project: timer.project ? timer.project.name : '',
+    time: formatTime(entry.startTime)
+  });
+  $('bannerRecover').hidden = false;
+}
+
+function setupTimerControls() {
+  timer.on('tick', (s) => {
+    $('txtStopwatch').textContent = formatClock(s.elapsedSeconds || 0);
+    tickEntries();
+  });
+  timer.on('stateChange', (s) => {
+    updateTimerView(s);
+    renderPicker();
+  });
+
+  $('btnStartPause').addEventListener('click', toggleTimer);
+  $('btnStop').addEventListener('click', () => stopTimer());
+
+  // Changing the project while a timer is active switches to the new project.
+  $('cmbProjects').addEventListener('change', () => {
+    const s = timer.getState();
+    const projectId = Number($('cmbProjects').value);
+    if (!projectId) return;
+    saveSetting('lastProjectId', projectId);
+    if (s.isRunning && s.project && s.project.id !== projectId) {
+      clearTimeout(switchTimeout);
+      // Wait a moment so that arrow-keying through the list does not create many entries.
+      switchTimeout = setTimeout(async () => {
+        try {
+          await timer.start(projectId, $('txtQuickNote').value, $('txtTicket').value);
+        } catch (err) {
+          console.error(err);
+        }
+      }, 800);
+    } else if (s.isPaused) {
+      timer.updateActive({ projectId }).catch(console.error);
+    }
+  });
+
+  // Note and ticket changes are applied to the active entry.
+  const applyNoteAndTicket = () => {
+    clearTimeout(noteTimeout);
+    noteTimeout = setTimeout(() => {
+      timer.updateActive({ note: $('txtQuickNote').value, ticket: $('txtTicket').value }).catch(console.error);
+    }, 500);
+  };
+  $('txtQuickNote').addEventListener('input', applyNoteAndTicket);
+  $('txtTicket').addEventListener('input', applyNoteAndTicket);
+
+  // Reminder banner
+  window.addEventListener('in-app-checkin', (e) => {
+    $('txtCheckInMsg').textContent = t('checkin.msg', { project: e.detail.projectName, time: e.detail.timeStr });
+    $('bannerCheckIn').hidden = false;
+  });
+  $('btnCheckInKeep').addEventListener('click', () => {
+    timer.resetCheckIn();
+    $('bannerCheckIn').hidden = true;
+  });
+  $('btnCheckInSwitch').addEventListener('click', () => {
+    timer.resetCheckIn();
+    $('bannerCheckIn').hidden = true;
+    $('cmbProjects').scrollIntoView({ block: 'center', behavior: 'smooth' });
+    $('cmbProjects').focus();
+  });
+  $('btnCheckInStop').addEventListener('click', () => stopTimer());
+
+  // Running timer found after a reload
+  $('btnRecoverKeep').addEventListener('click', () => { $('bannerRecover').hidden = true; });
+  $('btnRecoverNow').addEventListener('click', () => stopTimer());
+  $('btnRecoverLast').addEventListener('click', async () => {
+    await stopTimer(await timer.getLastActivity());
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+function setupSettings() {
+  const select = $('selCheckIn');
+  select.value = String(state.settings.checkInMinutes);
+  select.addEventListener('change', async () => {
+    const minutes = Number(select.value);
+    await saveSetting('checkInMinutes', minutes);
+    timer.setCheckInMinutes(minutes);
+    if (minutes > 0) await ambient.requestNotificationPermission();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+
+function setupTabs() {
   const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
   const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
 
-  function activateTab(tabToActivate, setFocus = true) {
-    tabs.forEach(tab => {
-      const isTarget = tab === tabToActivate;
-      tab.classList.toggle('active', isTarget);
-      tab.setAttribute('aria-selected', isTarget ? 'true' : 'false');
-      tab.setAttribute('tabindex', isTarget ? '0' : '-1');
-    });
-
-    const targetPanelId = tabToActivate.getAttribute('aria-controls');
-    panels.forEach(panel => {
-      const isTarget = panel.id === targetPanelId;
-      panel.classList.toggle('active', isTarget);
-    });
-
-    if (setFocus) tabToActivate.focus();
+  function activate(tab, focus) {
+    for (const other of tabs) {
+      const on = other === tab;
+      other.classList.toggle('active', on);
+      other.setAttribute('aria-selected', String(on));
+      other.setAttribute('tabindex', on ? '0' : '-1');
+    }
+    const target = tab.getAttribute('aria-controls');
+    for (const panel of panels) panel.classList.toggle('active', panel.id === target);
+    if (focus) tab.focus();
   }
 
   tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => activateTab(tab, false));
-
+    tab.addEventListener('click', () => activate(tab, false));
     tab.addEventListener('keydown', (e) => {
-      let targetIndex = null;
-      if (e.key === 'ArrowRight') {
-        targetIndex = (index + 1) % tabs.length;
-      } else if (e.key === 'ArrowLeft') {
-        targetIndex = (index - 1 + tabs.length) % tabs.length;
-      } else if (e.key === 'Home') {
-        targetIndex = 0;
-      } else if (e.key === 'End') {
-        targetIndex = tabs.length - 1;
-      }
-
-      if (targetIndex !== null) {
+      let next = null;
+      if (e.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      if (next !== null) {
         e.preventDefault();
-        activateTab(tabs[targetIndex], true);
+        activate(tabs[next], true);
       }
     });
   });
 }
 
-// ==============================================================================
-// GLOBAL KEYBOARD SHORTCUTS
-// ==============================================================================
-function setupKeyboardShortcuts() {
+// ---------------------------------------------------------------------------
+// Shortcuts
+// ---------------------------------------------------------------------------
+
+function setupShortcuts() {
   window.addEventListener('keydown', (e) => {
-    // Alt + S -> Toggle Timer Start/Pause
-    if (e.altKey && (e.key === 's' || e.key === 'S')) {
+    const key = e.key.toLowerCase();
+    if (e.altKey && key === 's') {
       e.preventDefault();
       toggleTimer();
-    }
-    // Alt + C -> Copy TSV for Excel
-    else if (e.altKey && (e.key === 'c' || e.key === 'C')) {
+    } else if (e.altKey && key === 'c') {
       e.preventDefault();
-      copyTsvForExcel();
-    }
-    // Alt + P -> Toggle PiP floating orb
-    else if (e.altKey && (e.key === 'p' || e.key === 'P')) {
+      copyTable({ kind: state.settings.exportRange });
+    } else if (e.altKey && key === 'p') {
       e.preventDefault();
-      el.btnTogglePip.click();
-    }
-    // Escape -> Dismiss checkin banner
-    else if (e.key === 'Escape') {
-      if (el.bannerCheckIn.style.display !== 'none') {
-        el.bannerCheckIn.style.display = 'none';
-      }
+      if (!$('btnTogglePip').hidden) $('btnTogglePip').click();
+    } else if (e.key === 'Escape' && !$('bannerCheckIn').hidden) {
+      $('bannerCheckIn').hidden = true;
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// App installation and updates
+// ---------------------------------------------------------------------------
 
 function setupPwa() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch(err => {
-      console.warn('Service worker registration failed:', err);
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      // A new version took over: reload once so the new files are used.
+      if (!hadController || reloading) return;
+      reloading = true;
+      location.reload();
     });
+    navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('Service worker not registered:', err));
   }
 
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
-    el.bannerInstall.style.display = 'flex';
+    deferredInstallPrompt = e;
+    $('bannerInstall').hidden = false;
   });
-
-  el.btnInstallPwa.addEventListener('click', async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const choice = await deferredPrompt.userChoice;
-      if (choice.outcome === 'accepted') {
-        el.bannerInstall.style.display = 'none';
-      }
-      deferredPrompt = null;
-    }
+  $('btnInstallPwa').addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const choice = await deferredInstallPrompt.userChoice;
+    if (choice.outcome === 'accepted') $('bannerInstall').hidden = true;
+    deferredInstallPrompt = null;
   });
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 document.addEventListener('DOMContentLoaded', init);

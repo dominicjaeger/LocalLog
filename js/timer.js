@@ -1,189 +1,177 @@
-// LocalLog - Timer State Machine & Heartbeat Engine
+// LocalLog - timer. Pause = segment: pausing closes the current entry, resuming starts a new
+// entry with the same project, note and ticket. Every entry is exactly start -> end.
+// The running entry lives in the database (empty endTime), so it survives a reload.
 
-import { getProjects, saveEntry } from './storage.js';
+import {
+  getProjects, getCustomers, getRunningEntries, addEntry, updateEntry, deleteEntry, getSetting, setSetting
+} from './storage.js';
+import { splitSegment, parseMs } from './core/time.js';
 
 export class TimerEngine {
   constructor() {
-    this.state = {
-      isRunning: false,
-      isPaused: false,
-      activeProject: null,
-      activeEntryId: null,
-      segmentStartTime: null,
-      accumulatedSeconds: 0,
-      lastCheckpointTime: null,
-      lastCheckInTime: null
-    };
-
-    this.listeners = {
-      tick: [],
-      stateChange: [],
-      checkIn: []
-    };
-
-    this.intervalId = null;
-    this.startHeartbeat();
+    this.running = null;          // raw running entry, or null
+    this.paused = null;           // { projectId, note, ticket } while paused
+    this.project = null;
+    this.customer = null;
+    this.accumulated = 0;         // seconds of closed segments in this work session
+    this.checkInMinutes = 30;     // 0 = off
+    this.lastCheckInTime = null;
+    this.lastSeenWrite = 0;
+    this.listeners = { tick: [], stateChange: [], checkIn: [] };
+    this.intervalId = setInterval(() => this.heartbeat(), 1000);
   }
 
-  on(event, callback) {
-    if (this.listeners[event]) {
-      this.listeners[event].push(callback);
-    }
+  on(event, cb) {
+    if (this.listeners[event]) this.listeners[event].push(cb);
   }
 
   emit(event, data) {
-    if (this.listeners[event]) {
-      for (const cb of this.listeners[event]) {
-        try { cb(data); } catch (e) { console.error(`Error in timer listener [${event}]:`, e); }
-      }
+    for (const cb of this.listeners[event] || []) {
+      try { cb(data); } catch (err) { console.error(`Timer listener [${event}] failed:`, err); }
     }
+  }
+
+  async resolve(projectId) {
+    const [projects, customers] = await Promise.all([getProjects(), getCustomers()]);
+    this.project = projects.find((p) => p.id === projectId) || null;
+    this.customer = this.project ? customers.find((c) => c.id === this.project.customerId) || null : null;
+  }
+
+  /** Picks up a running entry from the database (after a reload or after data was replaced). Returns it or null. */
+  async load() {
+    const open = (await getRunningEntries()).sort((a, b) => parseMs(b.startTime) - parseMs(a.startTime));
+    // More than one open entry should not happen; drop the older ones (they have no end and no duration).
+    for (const stale of open.slice(1)) await deleteEntry(stale.id);
+
+    this.paused = null;
+    this.accumulated = 0;
+    this.running = open[0] || null;
+    if (this.running) {
+      await this.resolve(this.running.projectId);
+      this.lastCheckInTime = Date.now();
+    } else {
+      this.project = null;
+      this.customer = null;
+    }
+    this.emit('stateChange', this.getState());
+    return this.running;
+  }
+
+  setCheckInMinutes(minutes) {
+    this.checkInMinutes = Number(minutes) || 0;
+    this.lastCheckInTime = Date.now();
   }
 
   getElapsedSeconds() {
-    let secs = this.state.accumulatedSeconds;
-    if (this.state.isRunning && this.state.segmentStartTime) {
-      const currentSegment = Math.floor((Date.now() - this.state.segmentStartTime) / 1000);
-      secs += Math.max(0, currentSegment);
+    let secs = this.accumulated;
+    if (this.running) {
+      const start = parseMs(this.running.startTime);
+      if (start !== null) secs += Math.max(0, Math.floor((Date.now() - start) / 1000));
     }
-    return Math.max(0, secs);
-  }
-
-  async start(projectId, note = '') {
-    if (this.state.isRunning || this.state.isPaused) {
-      await this.stop();
-    }
-
-    const projects = await getProjects();
-    const proj = projects.find(p => Number(p.id) === Number(projectId));
-    if (!proj) throw new Error('Selected project was not found.');
-
-    const now = new Date();
-    const newEntry = await saveEntry({
-      projectId: proj.id,
-      projectName: proj.name,
-      startTime: now.toISOString(),
-      endTime: '',
-      durationSeconds: 0,
-      note: (note || '').replace(/[\r\n]/g, ' ')
-    });
-
-    this.state.isRunning = true;
-    this.state.isPaused = false;
-    this.state.activeProject = proj;
-    this.state.activeEntryId = newEntry.id;
-    this.state.segmentStartTime = now.getTime();
-    this.state.accumulatedSeconds = 0;
-    this.state.lastCheckpointTime = now.getTime();
-    this.state.lastCheckInTime = now.getTime();
-
-    this.emit('stateChange', this.getState());
-  }
-
-  async pause() {
-    if (!this.state.isRunning) return;
-    const elapsed = Math.floor((Date.now() - this.state.segmentStartTime) / 1000);
-    this.state.accumulatedSeconds += Math.max(0, elapsed);
-    this.state.isRunning = false;
-    this.state.isPaused = true;
-    this.state.segmentStartTime = null;
-
-    await saveEntry({
-      id: this.state.activeEntryId,
-      projectId: this.state.activeProject.id,
-      projectName: this.state.activeProject.name,
-      durationSeconds: this.state.accumulatedSeconds
-    });
-
-    this.emit('stateChange', this.getState());
-  }
-
-  resume() {
-    if (!this.state.isPaused || !this.state.activeProject) return;
-    const now = Date.now();
-    this.state.segmentStartTime = now;
-    this.state.lastCheckpointTime = now;
-    this.state.lastCheckInTime = now;
-    this.state.isRunning = true;
-    this.state.isPaused = false;
-
-    this.emit('stateChange', this.getState());
-  }
-
-  async stop(adjustSeconds = 0) {
-    if (!this.state.isRunning && !this.state.isPaused) return;
-
-    let totalSecs = this.state.accumulatedSeconds;
-    if (this.state.isRunning && this.state.segmentStartTime) {
-      totalSecs += Math.floor((Date.now() - this.state.segmentStartTime) / 1000);
-    }
-    totalSecs = Math.max(1, totalSecs + adjustSeconds);
-
-    const nowIso = new Date().toISOString();
-    await saveEntry({
-      id: this.state.activeEntryId,
-      projectId: this.state.activeProject.id,
-      projectName: this.state.activeProject.name,
-      endTime: nowIso,
-      durationSeconds: totalSecs
-    });
-
-    this.state.isRunning = false;
-    this.state.isPaused = false;
-    this.state.activeProject = null;
-    this.state.activeEntryId = null;
-    this.state.segmentStartTime = null;
-    this.state.accumulatedSeconds = 0;
-    this.state.lastCheckpointTime = null;
-    this.state.lastCheckInTime = null;
-
-    this.emit('stateChange', this.getState());
-  }
-
-  resetCheckIn() {
-    this.state.lastCheckInTime = Date.now();
+    return secs;
   }
 
   getState() {
     return {
-      isRunning: this.state.isRunning,
-      isPaused: this.state.isPaused,
-      activeProject: this.state.activeProject,
-      activeEntryId: this.state.activeEntryId,
+      isRunning: Boolean(this.running),
+      isPaused: Boolean(this.paused),
+      entry: this.running,
+      project: this.project,
+      customer: this.customer,
+      colorHex: this.customer ? this.customer.colorHex : null,
       elapsedSeconds: this.getElapsedSeconds()
     };
   }
 
-  startHeartbeat() {
-    if (this.intervalId) clearInterval(this.intervalId);
-    this.intervalId = setInterval(async () => {
-      const now = Date.now();
-      const elapsed = this.getElapsedSeconds();
+  async start(projectId, note = '', ticket = '') {
+    if (this.running || this.paused) await this.stop();
+    await this.resolve(Number(projectId));
+    if (!this.project) throw new Error('Selected project was not found.');
+    this.running = await addEntry({
+      projectId: this.project.id,
+      startTime: new Date().toISOString(),
+      note,
+      ticket
+    });
+    this.accumulated = 0;
+    this.lastCheckInTime = Date.now();
+    this.emit('stateChange', this.getState());
+  }
 
-      this.emit('tick', {
-        ...this.getState(),
-        elapsedSeconds: elapsed
-      });
+  async pause() {
+    if (!this.running) return;
+    const nowIso = new Date().toISOString();
+    const { closePatch, next } = splitSegment(this.running, nowIso);
+    const seconds = Math.max(0, Math.round((parseMs(nowIso) - parseMs(this.running.startTime)) / 1000));
+    this.accumulated += seconds;
+    await updateEntry(this.running.id, closePatch);
+    this.paused = { projectId: next.projectId, note: next.note, ticket: next.ticket };
+    this.running = null;
+    this.emit('stateChange', this.getState());
+  }
 
-      // 60-second crash protection checkpoint save
-      if (this.state.isRunning && this.state.lastCheckpointTime) {
-        if ((now - this.state.lastCheckpointTime) >= 60000) {
-          this.state.lastCheckpointTime = now;
-          saveEntry({
-            id: this.state.activeEntryId,
-            projectId: this.state.activeProject.id,
-            projectName: this.state.activeProject.name,
-            durationSeconds: elapsed
-          }, false).catch(console.error);
-        }
+  async resume() {
+    if (!this.paused) return;
+    const { projectId, note, ticket } = this.paused;
+    await this.resolve(projectId);
+    this.running = await addEntry({ projectId, startTime: new Date().toISOString(), note, ticket });
+    this.paused = null;
+    this.lastCheckInTime = Date.now();
+    this.emit('stateChange', this.getState());
+  }
+
+  /** Stops the timer. `endIso` lets the caller end it earlier (for example at the last activity). */
+  async stop(endIso = null) {
+    if (this.running) {
+      const start = parseMs(this.running.startTime);
+      let end = endIso ? parseMs(endIso) : Date.now();
+      if (end === null || end < start) end = Date.now();
+      if (end - start < 1000) {
+        await deleteEntry(this.running.id); // an accidental click, nothing worth keeping
+      } else {
+        await updateEntry(this.running.id, { endTime: new Date(end).toISOString() });
       }
+    }
+    this.running = null;
+    this.paused = null;
+    this.project = null;
+    this.customer = null;
+    this.accumulated = 0;
+    this.lastCheckInTime = null;
+    this.emit('stateChange', this.getState());
+  }
 
-      // 30-minute anti-drift check-in
-      if (this.state.isRunning && this.state.lastCheckInTime) {
-        if ((now - this.state.lastCheckInTime) >= (30 * 60 * 1000)) {
-          this.state.lastCheckInTime = now;
-          this.emit('checkIn', this.getState());
-        }
-      }
-    }, 1000);
+  /** The time of the last sign of life, saved about every 30 seconds while a timer runs. */
+  async getLastActivity() {
+    const iso = await getSetting('lastSeenAt', null);
+    return iso || null;
+  }
+
+  async updateActive(patch) {
+    if (this.running) {
+      this.running = await updateEntry(this.running.id, patch);
+    } else if (this.paused) {
+      this.paused = { ...this.paused, ...patch };
+    }
+  }
+
+  resetCheckIn() {
+    this.lastCheckInTime = Date.now();
+  }
+
+  heartbeat() {
+    const now = Date.now();
+    this.emit('tick', this.getState());
+
+    if (this.running && now - this.lastSeenWrite >= 30000) {
+      this.lastSeenWrite = now;
+      setSetting('lastSeenAt', new Date(now).toISOString()).catch(() => {});
+    }
+
+    if (this.running && this.checkInMinutes > 0 && this.lastCheckInTime
+        && now - this.lastCheckInTime >= this.checkInMinutes * 60000) {
+      this.lastCheckInTime = now;
+      this.emit('checkIn', this.getState());
+    }
   }
 }

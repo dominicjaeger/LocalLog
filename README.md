@@ -1,55 +1,106 @@
 # LocalLog
 
-A lightweight, zero-install, local-first companion for effortless project time tracking—built for personal productivity and designed to meet strict corporate privacy and security expectations.
+Simple time tracking for your projects, in your browser. **Your data stays on your computer.**
 
-Now available as a modern **Progressive Web App (PWA)** with pure web standards (zero build step) alongside the classic single-file PowerShell desktop script.
+LocalLog is a web app (a Progressive Web App) that you can open in Chrome or Edge and install like a regular program. The app files are delivered from a website, but everything you enter is saved only on your own device. LocalLog has no account, no server database and no tracking.
 
----
-
-## Built for Enterprise Environments: Privacy, Security & Transparency
-
-Corporate environments rightly scrutinize tools that touch daily work routines. LocalLog is engineered from the ground up so individuals can stay organized without introducing compliance or security risks:
-
-* **Zero Network Traffic:** LocalLog runs 100% client-side in the browser. It never connects to external servers, cloud databases, or third-party APIs. No telemetry, analytics, or usage statistics are ever transmitted.
-* **100% Offline Capability:** Powered by a local Service Worker, LocalLog works completely offline once cached, even with no network connection.
-* **Dual Persistence (IndexedDB + Direct CSV Disk Sync):** Your data is stored locally in browser IndexedDB. With the modern **File System Access API** (Chrome/Edge), LocalLog can sync directly in two directions with real `projects.csv` and `entries.csv` files in a local folder of your choice on your computer.
-* **Fully Auditable Source Code:** Zero npm dependencies, zero node_modules, and zero compilation. All HTML, CSS, and ES6 JavaScript can be inspected directly line-by-line by internal IT and security teams.
-* **Austrian Locale (`de-AT`):** Native support for comma decimals (`1,50 h`), 24-hour time (`HH:mm`), European dates (`DD.MM.YYYY`), and formula-injection guards (`'`, `=`, `+`, `-`, `@`) when copying tables to Excel.
+The interface is available in **English** and **German** (switch with EN | DE in the header).
 
 ---
 
-## Key Features
+## What you can do
 
-* **Ambient Awareness Modes (Test & Toggle):**
-  * **Option A: Document Picture-in-Picture (PiP):** Pops an always-on-top floating mini-widget above Excel, Teams, and desktop apps showing your live breathing orb and stopwatch.
-  * **Option B: Dynamic Favicon & Notifications:** Renders active project color dot directly inside your browser tab icon and taskbar badge, plus native 30-min reminder cards.
-* **Flat, Distraction-Free Project List:** Create color-coded projects in seconds and deactivate finished ones to keep your active dropdown clean.
-* **One-Click Excel Copy:** View your logged entries in a clean table and copy them to your clipboard in a single click for instant pasting into Microsoft Excel.
-* **Automatic Crash & Drift Checkpoints:** In-memory checkpoints save duration state every 60 seconds to protect against accidental browser closing.
+* Track time with a timer, or add entries by hand.
+* Organise work by **customer → project**, and add an optional **ticket** (Jira or any other system) to each entry. If a project has a ticket link, ticket numbers become clickable.
+* **Pause and resume**: each pause closes the current entry and resuming starts a new one for the same project, note and ticket.
+* **Edit entries directly in the table**: click a cell, change it, press Enter (Esc cancels).
+* **Export** the table: copy it and paste into Excel, or download a CSV file. Choose today, this week, this month or everything.
+* **Weekly overview** with hours per customer and project (Monday to Sunday).
+* Optional **rates** (per customer, per project) and values in EUR.
+* Optional **reminder** every 30 or 60 minutes, and an optional always-on-top mini window (Chrome and Edge).
+
+Numbers, dates and times follow your browser's regional settings.
 
 ---
 
-## Getting Started: PWA (Recommended)
+## Where your data lives, and its limits
 
-### Option 1: Test Locally with Zero Dependencies
-Run the included test server helper in PowerShell:
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-LocalLogPwa.ps1
+* Your entries are stored **only in this browser on this computer**. Other browsers and other computers do not see them.
+* If you **clear your browser data**, your entries are deleted.
+* In a **private window**, entries are lost when the window closes. LocalLog shows a warning in that case.
+* The browser may clean up stored data when the disk is very full, unless it grants LocalLog protection. The "Your data" card shows whether the data is protected.
+
+### How to back up
+
+* **Backup folder** (Chrome and Edge): under *Settings*, choose a folder. LocalLog keeps `customers.csv`, `projects.csv`, `entries.csv` and `meta.csv` there up to date. If the browser asks for permission again after a restart, use the *Reconnect folder* button.
+* **Download**: *Settings → Download backup files* saves the same files at any time.
+* The "Your data" card shows when the last backup was made and turns amber after 7 days.
+* When you choose a folder that already contains LocalLog files, you decide whether to load the folder's data into the browser or to replace the folder's files with the browser's data.
+
+---
+
+## For developers
+
+Plain HTML, CSS and ES modules. **No dependencies and no build step.**
+
+### Structure
+
 ```
-This starts a lightweight server on `http://localhost:8080` and opens LocalLog in your browser.
-In Microsoft Edge or Google Chrome, click the **"Install App"** icon in the address bar to install LocalLog as a native standalone desktop app on your PC!
+index.html            Page, with the Content Security Policy
+sw.js                 Service worker (offline cache)
+manifest.webmanifest  Install information
+css/app.css           Styles (no inline styles anywhere)
+css/pip.css           Styles for the mini window
+icons/                App icons
+js/version.js         APP_VERSION and SCHEMA_VERSION
+js/app.js             Start-up, timer controls, header, tabs, shortcuts
+js/i18n.js            English and German texts
+js/state.js           In-memory copy of the data for the screens
+js/storage.js         IndexedDB access (database "locallog")
+js/backup.js          Backup folder, downloads, storage protection
+js/timer.js           Timer (pause = segment)
+js/ambient.js         Mini window, tab icon, title, reminder
+js/core/              Pure logic without DOM access (time, format, csv, export, backup, validate)
+js/ui/                Screen code
+```
 
-### Option 2: Deploy to GitHub Pages (Free, Instant HTTPS)
-1. Push this repository to GitHub.
-2. In your repository settings $\rightarrow$ **Pages** $\rightarrow$ select the `main` branch as the source and click **Save**.
-3. Visit `https://<your-username>.github.io/<repo-name>/`.
-4. Click **Install LocalLog** from your browser address bar. The Service Worker will cache the application for full offline use.
+The modules in `js/core/` never touch the DOM so that unit tests can be added later.
+
+### Security policy
+
+`index.html` sets `connect-src 'none'`, so the app cannot send data over the network, and it forbids inline scripts and styles. Therefore: **never add `style="..."` attributes or inline `<script>`**. Put styles in `css/`. Set dynamic colours from JavaScript with `element.style.setProperty(...)`, which is allowed.
+
+### Run locally
+
+Service workers and ES modules need a web server (opening `index.html` as a file does not work). Use any static server, for example:
+
+```bash
+npx serve .
+```
+
+or
+
+```bash
+python -m http.server 8080
+```
+
+then open the printed address (for example `http://localhost:8080`).
+
+### Bump the version
+
+The version is kept in two places that must always be changed together:
+
+1. `APP_VERSION` in `js/version.js`
+2. `VERSION` at the top of `sw.js`
+
+A new version changes `sw.js`, so the browser installs the new service worker, which loads fresh files into a new cache (`locallog-<version>`) and removes the old one. Open pages reload once when the new version takes over. If you add or remove a file, update `ASSETS_TO_CACHE` in `sw.js` as well. If the data layout changes, increase `SCHEMA_VERSION`.
+
+### Deploy to GitHub Pages
+
+1. Push the repository to GitHub.
+2. In the repository settings, open **Pages**, choose the `main` branch as the source and save.
+3. Open `https://<your-username>.github.io/<repo-name>/` and install the app from the browser's address bar.
 
 ---
 
-## Classic Desktop Version (PowerShell)
-
-The original single-file PowerShell 5.1 + WPF desktop application remains available in `LocalLog.ps1`:
-```powershell
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\LocalLog.ps1
-```
+MIT License. A personal side project, provided as is, without warranty.

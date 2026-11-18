@@ -1,22 +1,25 @@
-// LocalLog - Dual Ambient Awareness Engine (Document PiP Mini-Timer vs Badge & Notifications)
+// LocalLog - status awareness: floating mini window, dynamic tab icon, window title, app badge, reminders.
 
-import { formatDuration } from './csv.js';
+import { formatClock } from './core/time.js';
+import { t } from './i18n.js';
+
+const IDLE_COLOR = '#9CA3AF';
+const PAUSED_COLOR = '#F59E0B';
 
 export class AmbientManager {
   constructor(timerEngine) {
     this.timer = timerEngine;
     this.pipWindow = null;
-    this.mode = 'both'; // 'pip', 'badge', 'both'
 
     this.faviconCanvas = document.createElement('canvas');
     this.faviconCanvas.width = 32;
     this.faviconCanvas.height = 32;
     this.faviconContext = this.faviconCanvas.getContext('2d');
-    this.faviconLink = document.querySelector("link[rel*='icon']") || this.createFaviconLink();
+    this.faviconLink = document.querySelector("link[rel='icon']") || this.createFaviconLink();
 
     this.timer.on('tick', (state) => this.onTick(state));
     this.timer.on('stateChange', (state) => this.onStateChange(state));
-    this.timer.on('checkIn', (state) => this.triggerCheckInPrompt(state));
+    this.timer.on('checkIn', (state) => this.triggerCheckIn(state));
   }
 
   createFaviconLink() {
@@ -25,6 +28,8 @@ export class AmbientManager {
     document.head.appendChild(link);
     return link;
   }
+
+  // ---- Mini window (Document Picture-in-Picture; Chrome and Edge) ----
 
   isPipSupported() {
     return 'documentPictureInPicture' in window;
@@ -38,110 +43,48 @@ export class AmbientManager {
     if (this.isPipActive()) {
       this.closePip();
       return false;
-    } else {
-      await this.openPip();
-      return true;
     }
+    await this.openPip();
+    return this.isPipActive();
   }
 
   async openPip() {
-    if (!this.isPipSupported()) {
-      alert('Document Picture-in-Picture is not supported in this browser. Please use Google Chrome or Microsoft Edge.');
-      return;
-    }
-
+    if (!this.isPipSupported()) return;
     try {
-      this.pipWindow = await window.documentPictureInPicture.requestWindow({
-        width: 240,
-        height: 90
-      });
+      this.pipWindow = await window.documentPictureInPicture.requestWindow({ width: 260, height: 90 });
+      const doc = this.pipWindow.document;
+      doc.title = 'LocalLog';
 
-      // Inject minimal styled HTML into PiP window
-      const pipDoc = this.pipWindow.document;
-      pipDoc.title = 'LocalLog Floating Orb';
+      // The page's security policy forbids inline styles, so the stylesheet is loaded as a file.
+      const link = doc.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = new URL('./css/pip.css', document.baseURI).href;
+      doc.head.append(link);
 
-      pipDoc.head.innerHTML = `
-        <style>
-          * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
-          body {
-            background: #111827;
-            color: #F9FAFB;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 14px;
-            height: 100vh;
-            user-select: none;
-            overflow: hidden;
-          }
-          .orb-container {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-          }
-          .orb-dot {
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background: #F59E0B;
-            border: 2px solid #FFFFFF;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
-            transition: background 0.3s ease, transform 0.2s ease;
-          }
-          .info {
-            display: flex;
-            flex-direction: column;
-          }
-          .timer-text {
-            font-size: 20px;
-            font-weight: 700;
-            font-family: Consolas, monospace;
-            letter-spacing: 0.5px;
-          }
-          .project-name {
-            font-size: 11px;
-            color: #9CA3AF;
-            max-width: 110px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-          }
-          .pip-btn {
-            background: #1F2937;
-            border: 1px solid #374151;
-            color: #FFFFFF;
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 11px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s;
-          }
-          .pip-btn:hover { background: #374151; }
-          .pip-btn:active { transform: scale(0.96); }
-        </style>
-      `;
-
-      pipDoc.body.innerHTML = `
-        <div class="orb-container">
-          <div id="pipOrb" class="orb-dot"></div>
-          <div class="info">
-            <span id="pipTimer" class="timer-text">00:00:00</span>
-            <span id="pipProject" class="project-name">Idle</span>
-          </div>
-        </div>
-        <button id="pipBtnAction" class="pip-btn">Pause</button>
-      `;
-
-      const btn = pipDoc.getElementById('pipBtnAction');
-      btn.addEventListener('click', () => {
+      const dot = doc.createElement('div');
+      dot.id = 'miniDot';
+      dot.className = 'mini-dot';
+      const time = doc.createElement('span');
+      time.id = 'miniTime';
+      time.className = 'mini-time';
+      const project = doc.createElement('span');
+      project.id = 'miniProject';
+      project.className = 'mini-project';
+      const info = doc.createElement('div');
+      info.className = 'mini-info';
+      info.append(time, project);
+      const main = doc.createElement('div');
+      main.className = 'mini-main';
+      main.append(dot, info);
+      const button = doc.createElement('button');
+      button.id = 'miniButton';
+      button.className = 'mini-btn';
+      button.addEventListener('click', () => {
         const state = this.timer.getState();
-        if (state.isRunning) {
-          this.timer.pause();
-        } else if (state.isPaused) {
-          this.timer.resume();
-        }
+        if (state.isRunning) this.timer.pause();
+        else if (state.isPaused) this.timer.resume();
       });
+      doc.body.append(main, button);
 
       this.pipWindow.addEventListener('pagehide', () => {
         this.pipWindow = null;
@@ -151,7 +94,8 @@ export class AmbientManager {
       this.updatePipVisuals(this.timer.getState());
       window.dispatchEvent(new CustomEvent('pip-opened'));
     } catch (err) {
-      console.error('Failed to open Picture-in-Picture window:', err);
+      console.error('Could not open the mini window:', err);
+      this.pipWindow = null;
     }
   }
 
@@ -165,141 +109,107 @@ export class AmbientManager {
 
   updatePipVisuals(state) {
     if (!this.isPipActive()) return;
-    const pipDoc = this.pipWindow.document;
-    const orb = pipDoc.getElementById('pipOrb');
-    const timer = pipDoc.getElementById('pipTimer');
-    const proj = pipDoc.getElementById('pipProject');
-    const btn = pipDoc.getElementById('pipBtnAction');
+    const doc = this.pipWindow.document;
+    const dot = doc.getElementById('miniDot');
+    const time = doc.getElementById('miniTime');
+    const project = doc.getElementById('miniProject');
+    const button = doc.getElementById('miniButton');
+    if (!dot || !time || !project || !button) return;
 
-    if (!orb || !timer || !proj || !btn) return;
-
-    timer.textContent = formatDuration(state.elapsedSeconds || 0);
-
-    if (state.isRunning && state.activeProject) {
-      orb.style.backgroundColor = state.activeProject.colorHex || '#0078D4';
-      orb.style.boxShadow = `0 0 12px ${state.activeProject.colorHex || '#0078D4'}`;
-      proj.textContent = state.activeProject.name;
-      btn.textContent = 'Pause';
-      btn.style.display = 'block';
-    } else if (state.isPaused && state.activeProject) {
-      orb.style.backgroundColor = '#F59E0B';
-      orb.style.boxShadow = '0 0 8px #F59E0B';
-      proj.textContent = `Paused: ${state.activeProject.name}`;
-      btn.textContent = 'Resume';
-      btn.style.display = 'block';
+    time.textContent = formatClock(state.elapsedSeconds || 0);
+    if (state.isRunning && state.project) {
+      dot.style.backgroundColor = state.colorHex || '#0078D4';
+      project.textContent = state.project.name;
+      button.textContent = t('timer.pause');
+      button.hidden = false;
+    } else if (state.isPaused) {
+      dot.style.backgroundColor = PAUSED_COLOR;
+      project.textContent = t('timer.paused');
+      button.textContent = t('timer.resume');
+      button.hidden = false;
     } else {
-      orb.style.backgroundColor = '#9CA3AF';
-      orb.style.boxShadow = 'none';
-      proj.textContent = 'Idle';
-      btn.style.display = 'none';
+      dot.style.backgroundColor = IDLE_COLOR;
+      project.textContent = t('timer.idle');
+      button.hidden = true;
     }
   }
 
-  // ============================================================================
-  // BADGE, DYNAMIC FAVICON & TITLE
-  // ============================================================================
+  // ---- Tab icon, title, badge ----
 
   updateDynamicFavicon(colorHex, isRunning, isPaused) {
     const ctx = this.faviconContext;
     ctx.clearRect(0, 0, 32, 32);
-
     if (isRunning) {
-      // Solid project-colored circle with white pip
       ctx.beginPath();
       ctx.arc(16, 16, 13, 0, Math.PI * 2);
       ctx.fillStyle = colorHex || '#0078D4';
       ctx.fill();
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
       ctx.beginPath();
       ctx.arc(16, 16, 4, 0, Math.PI * 2);
       ctx.fillStyle = '#FFFFFF';
       ctx.fill();
     } else if (isPaused) {
-      // Amber circle with two vertical pause bars
       ctx.beginPath();
       ctx.arc(16, 16, 13, 0, Math.PI * 2);
-      ctx.fillStyle = '#F59E0B';
+      ctx.fillStyle = PAUSED_COLOR;
       ctx.fill();
-
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(11, 9, 3, 14);
       ctx.fillRect(18, 9, 3, 14);
     } else {
-      // Idle hollow ring with subtle dot
       ctx.beginPath();
       ctx.arc(16, 16, 12, 0, Math.PI * 2);
-      ctx.strokeStyle = '#9CA3AF';
+      ctx.strokeStyle = IDLE_COLOR;
       ctx.lineWidth = 3;
       ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(16, 16, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#F59E0B';
-      ctx.fill();
     }
-
+    this.faviconLink.type = 'image/png';
     this.faviconLink.href = this.faviconCanvas.toDataURL('image/png');
   }
 
   updateDocumentTitle(state) {
-    const timeStr = formatDuration(state.elapsedSeconds || 0);
-    if (state.isRunning && state.activeProject) {
-      document.title = `(${timeStr}) ${state.activeProject.name} - LocalLog`;
-    } else if (state.isPaused && state.activeProject) {
-      document.title = `(Paused) ${state.activeProject.name} - LocalLog`;
+    if (state.isRunning && state.project) {
+      document.title = `(${formatClock(state.elapsedSeconds || 0)}) ${state.project.name} - LocalLog`;
+    } else if (state.isPaused) {
+      document.title = `(${t('timer.paused')}) LocalLog`;
     } else {
-      document.title = 'LocalLog - Local-First Time Tracker';
+      document.title = 'LocalLog';
     }
   }
 
   updateAppBadge(state) {
-    if ('setAppBadge' in navigator) {
-      if (state.isRunning) {
-        // Can display running minutes
-        const mins = Math.max(1, Math.floor((state.elapsedSeconds || 0) / 60));
-        navigator.setAppBadge(mins).catch(() => {});
-      } else {
-        navigator.clearAppBadge().catch(() => {});
-      }
+    if (!('setAppBadge' in navigator)) return;
+    if (state.isRunning) {
+      const mins = Math.max(1, Math.floor((state.elapsedSeconds || 0) / 60));
+      navigator.setAppBadge(mins).catch(() => {});
+    } else {
+      navigator.clearAppBadge().catch(() => {});
     }
   }
 
-  // ============================================================================
-  // NATIVE WEB NOTIFICATIONS (30-Minute Check-in Prompt)
-  // ============================================================================
+  // ---- Reminder ----
 
   async requestNotificationPermission() {
     if (!('Notification' in window)) return false;
     if (Notification.permission === 'granted') return true;
-    const perm = await Notification.requestPermission();
-    return perm === 'granted';
+    if (Notification.permission === 'denied') return false;
+    return (await Notification.requestPermission()) === 'granted';
   }
 
-  async triggerCheckInPrompt(state) {
-    const hasPerm = await this.requestNotificationPermission();
-    const projName = state.activeProject ? state.activeProject.name : 'Current Project';
-    const timeStr = formatDuration(state.elapsedSeconds || 0);
+  triggerCheckIn(state) {
+    const projectName = state.project ? state.project.name : '';
+    const timeStr = formatClock(state.elapsedSeconds || 0);
 
-    if (hasPerm) {
-      const notif = new Notification('30-Minute Check-In | LocalLog', {
-        body: `You've logged ${timeStr} on "${projName}". Still on this task or ready to switch?`,
+    // A system notification only if the user has already allowed them (never asks without a click).
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const notification = new Notification(t('checkin.notifyTitle'), {
+        body: t('checkin.notifyBody', { time: timeStr, project: projectName }),
         icon: './icons/icon-192.png',
-        tag: 'checkin-reminder',
-        requireInteraction: false
+        tag: 'checkin-reminder'
       });
-      notif.onclick = () => {
-        window.focus();
-        notif.close();
-      };
+      notification.onclick = () => { window.focus(); notification.close(); };
     }
-
-    // In addition, display an accessible toast/banner within the main page
-    window.dispatchEvent(new CustomEvent('in-app-checkin', {
-      detail: { projName, timeStr }
-    }));
+    window.dispatchEvent(new CustomEvent('in-app-checkin', { detail: { projectName, timeStr } }));
   }
 
   onTick(state) {
@@ -309,8 +219,7 @@ export class AmbientManager {
   }
 
   onStateChange(state) {
-    const color = state.activeProject ? state.activeProject.colorHex : '#9CA3AF';
-    this.updateDynamicFavicon(color, state.isRunning, state.isPaused);
+    this.updateDynamicFavicon(state.colorHex, state.isRunning, state.isPaused);
     this.updatePipVisuals(state);
     this.updateDocumentTitle(state);
     this.updateAppBadge(state);

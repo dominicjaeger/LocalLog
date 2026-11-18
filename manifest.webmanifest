@@ -1,10 +1,11 @@
 {
-  "name": "LocalLog - Local-First Time Tracker",
+  "name": "LocalLog",
   "short_name": "LocalLog",
-  "description": "Lightweight, zero-install, local-first project time tracking with Excel export and ambient transition awareness.",
+  "description": "Simple time tracking for your projects. Your data stays on your computer.",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#F3F3F3",
+  "background_color": "#F5F6F8",
   "theme_color": "#0078D4",
   "orientation": "any",
   "icons": [
@@ -24,7 +25,7 @@
       "src": "./icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     }
   ],
   "categories": ["productivity", "utilities"]

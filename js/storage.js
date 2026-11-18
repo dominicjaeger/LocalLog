@@ -1,390 +1,270 @@
-// LocalLog - IndexedDB Storage Engine with File System Access API 2-Way CSV Sync
+// LocalLog - IndexedDB storage (database "locallog", version 1).
+// No DOM access. All data stays in this browser.
 
-import {
-  formatHoursAT,
-  formatRateAT,
-  formatValueAT,
-  formatDateAT,
-  formatTimeAT,
-  formatDuration,
-  parseCsv,
-  serializeCsv
-} from './csv.js';
+import { SCHEMA_VERSION } from './version.js';
 
-const DB_NAME = 'locallog_db';
-const DB_VERSION = 1;
+const DB_NAME = 'locallog';
+const DB_VERSION = SCHEMA_VERSION;
 
-let dbInstance = null;
-let boundDirectoryHandle = null;
+let dbPromise = null;
+const changeListeners = new Set();
+
+/** Called after customers, projects or entries changed (not for settings). */
+export function onDataChanged(cb) {
+  changeListeners.add(cb);
+  return () => changeListeners.delete(cb);
+}
+
+function notifyChanged() {
+  for (const cb of changeListeners) {
+    try { cb(); } catch (err) { console.error(err); }
+  }
+}
 
 function openDb() {
-  if (dbInstance) return Promise.resolve(dbInstance);
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains('projects')) {
-        db.createObjectStore('projects', { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains('entries')) {
-        const entryStore = db.createObjectStore('entries', { keyPath: 'id' });
-        entryStore.createIndex('projectId', 'projectId', { unique: false });
-        entryStore.createIndex('startTime', 'startTime', { unique: false });
-      }
-      if (!db.objectStoreNames.contains('settings')) {
-        db.createObjectStore('settings', { keyPath: 'key' });
-      }
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore('customers', { keyPath: 'id', autoIncrement: true });
+      const projects = db.createObjectStore('projects', { keyPath: 'id', autoIncrement: true });
+      projects.createIndex('customerId', 'customerId');
+      const entries = db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true });
+      entries.createIndex('projectId', 'projectId');
+      entries.createIndex('startTime', 'startTime');
+      db.createObjectStore('settings', { keyPath: 'key' });
     };
-
-    request.onsuccess = (e) => {
-      dbInstance = e.target.result;
-      resolve(dbInstance);
-    };
-
-    request.onerror = (e) => reject(e.target.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('Database upgrade blocked'));
   });
+  dbPromise.catch(() => { dbPromise = null; });
+  return dbPromise;
 }
 
-function tx(storeName, mode, callback) {
-  return openDb().then((db) => {
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(storeName, mode);
-      const store = transaction.objectStore(storeName);
-      let request;
-      try {
-        request = callback(store);
-      } catch (err) {
-        reject(err);
-        return;
-      }
-      transaction.oncomplete = () => resolve(request ? request.result : undefined);
-      transaction.onerror = () => reject(transaction.error);
-    });
+const rq = (request) => new Promise((resolve, reject) => {
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+
+/** Runs fn(stores) inside one transaction. Only await IndexedDB requests inside fn. */
+async function withTx(names, mode, fn) {
+  const db = await openDb();
+  const list = Array.isArray(names) ? names : [names];
+  const transaction = db.transaction(list, mode);
+  const done = new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error || new Error('Transaction aborted'));
   });
-}
-
-export async function seedDefaultProjects() {
-  const nowIso = new Date().toISOString();
-  const seed = [
-    { id: 1, name: 'Operation', colorHex: '#0078D4', hourlyRate: 75.0, isActive: 1, createdAt: nowIso },
-    { id: 2, name: 'General Changes', colorHex: '#8764B8', hourlyRate: 80.0, isActive: 1, createdAt: nowIso },
-    { id: 3, name: 'Project A', colorHex: '#107C10', hourlyRate: 95.0, isActive: 1, createdAt: nowIso },
-    { id: 4, name: 'Project B', colorHex: '#D83B01', hourlyRate: 90.0, isActive: 1, createdAt: nowIso }
-  ];
-  for (const p of seed) {
-    await saveProject(p, false);
+  done.catch(() => {});
+  const stores = {};
+  for (const n of list) stores[n] = transaction.objectStore(n);
+  let result;
+  try {
+    result = await fn(stores);
+  } catch (err) {
+    try { transaction.abort(); } catch { /* already finished */ }
+    throw err;
   }
+  await done;
+  return result;
 }
 
-export async function resetToDefaultProjects() {
-  const [projects, rawEntries] = await Promise.all([
-    getProjects(),
-    tx('entries', 'readonly', (store) => store.getAll())
-  ]);
-  const entriesList = rawEntries || [];
-  // Delete existing projects that have no associated entries
-  for (const p of projects) {
-    const hasEntries = entriesList.some(e => Number(e.projectId) === Number(p.id));
-    if (!hasEntries) {
-      await deleteProject(p.id);
-    }
-  }
-  await seedDefaultProjects();
-}
+const nowIso = () => new Date().toISOString();
 
+// ---------------------------------------------------------------------------
+// Start-up
+// ---------------------------------------------------------------------------
+
+/** Opens the database and creates the first-run data (one customer "Internal" with one project "General"). */
 export async function initStorage() {
   await openDb();
-  const existingProjects = await getProjects();
-  if (!existingProjects || existingProjects.length === 0) {
-    await seedDefaultProjects();
-  } else {
-    // If the database only contains the old legacy placeholder projects and 0 entries, upgrade to new requested defaults
-    const rawEntries = await tx('entries', 'readonly', (store) => store.getAll());
-    if ((!rawEntries || rawEntries.length === 0) && existingProjects.some(p => p.name === 'Project Alpha')) {
-      for (const p of existingProjects) {
-        await deleteProject(p.id);
-      }
-      await seedDefaultProjects();
-    }
-  }
-
-  // Recover unclosed entries from accidental browser quit
-  await recoverUnclosedEntries();
-
-  // Try retrieving cached directory handle
-  try {
-    const savedHandle = await getSetting('dirHandle');
-    if (savedHandle && (await verifyPermission(savedHandle, false))) {
-      boundDirectoryHandle = savedHandle;
-    }
-  } catch (err) {
-    console.warn('Could not restore directory handle:', err);
-  }
-}
-
-export async function getProjects(activeOnly = false) {
-  const all = await tx('projects', 'readonly', (store) => store.getAll());
-  const list = all || [];
-  const filtered = activeOnly ? list.filter(p => Number(p.isActive) === 1) : list;
-  return filtered.sort((a, b) => {
-    if (b.isActive !== a.isActive) return b.isActive - a.isActive;
-    return a.name.localeCompare(b.name);
-  });
-}
-
-export async function saveProject(project, triggerSync = true) {
-  if (!project.id) {
-    const all = await getProjects();
-    const maxId = all.reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
-    project.id = maxId + 1;
-  }
-  project.hourlyRate = parseFloat(project.hourlyRate) || 0.0;
-  project.isActive = Number(project.isActive) === 1 ? 1 : 0;
-  if (!project.createdAt) project.createdAt = new Date().toISOString();
-
-  await tx('projects', 'readwrite', (store) => store.put(project));
-  if (triggerSync) autoSyncToDisk();
-  return project;
-}
-
-export async function deleteProject(id) {
-  await tx('projects', 'readwrite', (store) => store.delete(Number(id)));
-  autoSyncToDisk();
-}
-
-export async function getEntries() {
-  const [rawEntries, projects] = await Promise.all([
-    tx('entries', 'readonly', (store) => store.getAll()),
-    getProjects()
-  ]);
-
-  const projectsById = new Map();
-  for (const p of projects) projectsById.set(Number(p.id), p);
-
-  const list = [];
-  for (const r of (rawEntries || [])) {
-    if (!r.endTime) continue; // Skip in-progress segment
-    const startDt = new Date(r.startTime);
-    const endDt = new Date(r.endTime);
-    const secs = Number(r.durationSeconds) || 0;
-    const hours = Math.round((secs / 3600.0) * 100) / 100;
-    const proj = projectsById.get(Number(r.projectId));
-    const pName = proj ? proj.name : (r.projectName || 'Unknown Project');
-    const colorHex = proj ? proj.colorHex : '#0078D4';
-    const rate = proj ? proj.hourlyRate : 0.0;
-    const valEur = Math.round(hours * rate * 100) / 100;
-
-    list.push({
-      id: Number(r.id),
-      projectId: Number(r.projectId),
-      projectName: pName,
-      colorHex,
-      startTime: r.startTime,
-      endTime: r.endTime,
-      startSort: startDt.getTime(),
-      dateDisplay: formatDateAT(startDt),
-      timeRange: `${formatTimeAT(startDt)} - ${formatTimeAT(endDt)}`,
-      durationSeconds: secs,
-      durationDisplay: formatDuration(secs),
-      hoursDecimal: hours,
-      hoursDisplay: formatHoursAT(hours),
-      rateDisplay: formatRateAT(rate),
-      valueDisplay: formatValueAT(valEur),
-      note: r.note || ''
+  const count = await withTx('customers', 'readonly', ({ customers }) => rq(customers.count()));
+  if (count === 0) {
+    const t = nowIso();
+    await withTx(['customers', 'projects'], 'readwrite', async ({ customers, projects }) => {
+      const customerId = await rq(customers.add({
+        name: 'Internal', colorHex: '#0078D4', defaultRate: null, isActive: true, createdAt: t
+      }));
+      await rq(projects.add({
+        customerId, name: 'General', hourlyRate: null, ticketUrlTemplate: null, isActive: true, createdAt: t
+      }));
     });
   }
-
-  // Sort newest first
-  return list.sort((a, b) => b.startSort - a.startSort);
 }
 
-export async function saveEntry(entry, triggerSync = true) {
-  if (!entry.id) {
-    const all = await tx('entries', 'readonly', (store) => store.getAll());
-    const maxId = (all || []).reduce((max, e) => Math.max(max, Number(e.id) || 0), 0);
-    entry.id = maxId + 1;
-  }
-  entry.projectId = Number(entry.projectId);
-  entry.durationSeconds = Number(entry.durationSeconds) || 0;
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
 
-  await tx('entries', 'readwrite', (store) => store.put(entry));
-  if (triggerSync) autoSyncToDisk();
-  return entry;
+export async function getCustomers() {
+  const all = await withTx('customers', 'readonly', ({ customers }) => rq(customers.getAll()));
+  return all.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function addCustomer({ name, colorHex, defaultRate = null }) {
+  const record = {
+    name: name.trim(), colorHex, defaultRate, isActive: true, createdAt: nowIso()
+  };
+  record.id = await withTx('customers', 'readwrite', ({ customers }) => rq(customers.add(record)));
+  notifyChanged();
+  return record;
+}
+
+export async function updateCustomer(id, patch) {
+  const updated = await withTx('customers', 'readwrite', async ({ customers }) => {
+    const current = await rq(customers.get(id));
+    if (!current) throw new Error('Customer not found');
+    const next = { ...current, ...patch, id };
+    await rq(customers.put(next));
+    return next;
+  });
+  notifyChanged();
+  return updated;
+}
+
+/**
+ * Deletes a customer and its projects. Refuses (error.code === 'hasEntries') while any entry references them.
+ */
+export async function deleteCustomer(id) {
+  await withTx(['customers', 'projects', 'entries'], 'readwrite', async ({ customers, projects, entries }) => {
+    const owned = await rq(projects.index('customerId').getAll(id));
+    for (const p of owned) {
+      const used = await rq(entries.index('projectId').count(p.id));
+      if (used > 0) throw Object.assign(new Error('Customer has entries'), { code: 'hasEntries' });
+    }
+    for (const p of owned) await rq(projects.delete(p.id));
+    await rq(customers.delete(id));
+  });
+  notifyChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+export async function getProjects() {
+  const all = await withTx('projects', 'readonly', ({ projects }) => rq(projects.getAll()));
+  return all.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function addProject({ customerId, name, hourlyRate = null, ticketUrlTemplate = null }) {
+  const record = {
+    customerId, name: name.trim(), hourlyRate, ticketUrlTemplate, isActive: true, createdAt: nowIso()
+  };
+  record.id = await withTx('projects', 'readwrite', ({ projects }) => rq(projects.add(record)));
+  notifyChanged();
+  return record;
+}
+
+export async function updateProject(id, patch) {
+  const updated = await withTx('projects', 'readwrite', async ({ projects }) => {
+    const current = await rq(projects.get(id));
+    if (!current) throw new Error('Project not found');
+    const next = { ...current, ...patch, id };
+    await rq(projects.put(next));
+    return next;
+  });
+  notifyChanged();
+  return updated;
+}
+
+/** Refuses (error.code === 'hasEntries') while any entry references the project. */
+export async function deleteProject(id) {
+  await withTx(['projects', 'entries'], 'readwrite', async ({ projects, entries }) => {
+    const used = await rq(entries.index('projectId').count(id));
+    if (used > 0) throw Object.assign(new Error('Project has entries'), { code: 'hasEntries' });
+    await rq(projects.delete(id));
+  });
+  notifyChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Entries
+// ---------------------------------------------------------------------------
+
+/** All entries including the running one (empty endTime). */
+export async function getEntries() {
+  return withTx('entries', 'readonly', ({ entries }) => rq(entries.getAll()));
+}
+
+export async function getRunningEntries() {
+  const all = await getEntries();
+  return all.filter((e) => !e.endTime);
+}
+
+export async function addEntry({ projectId, startTime, endTime = '', note = '', ticket = '' }) {
+  const t = nowIso();
+  const record = {
+    projectId: Number(projectId),
+    startTime,
+    endTime,
+    note: String(note || '').replace(/[\r\n]+/g, ' '),
+    ticket: String(ticket || '').trim(),
+    createdAt: t,
+    updatedAt: t
+  };
+  record.id = await withTx('entries', 'readwrite', ({ entries }) => rq(entries.add(record)));
+  notifyChanged();
+  return record;
+}
+
+/** Read-modify-write: only the fields in `patch` change; everything else is kept. */
+export async function updateEntry(id, patch) {
+  const updated = await withTx('entries', 'readwrite', async ({ entries }) => {
+    const current = await rq(entries.get(id));
+    if (!current) throw new Error('Entry not found');
+    const next = { ...current, ...patch, id, updatedAt: nowIso() };
+    if (typeof next.note === 'string') next.note = next.note.replace(/[\r\n]+/g, ' ');
+    if (typeof next.ticket === 'string') next.ticket = next.ticket.trim();
+    await rq(entries.put(next));
+    return next;
+  });
+  notifyChanged();
+  return updated;
 }
 
 export async function deleteEntry(id) {
-  await tx('entries', 'readwrite', (store) => store.delete(Number(id)));
-  autoSyncToDisk();
+  await withTx('entries', 'readwrite', ({ entries }) => rq(entries.delete(id)));
+  notifyChanged();
 }
 
-export async function recoverUnclosedEntries() {
-  const all = await tx('entries', 'readonly', (store) => store.getAll());
-  if (!all) return;
-  for (const r of all) {
-    if (!r.endTime && r.startTime) {
-      const startDt = new Date(r.startTime);
-      const savedSecs = Math.max(60, Number(r.durationSeconds) || 60);
-      r.durationSeconds = savedSecs;
-      r.endTime = new Date(startDt.getTime() + savedSecs * 1000).toISOString();
-      await tx('entries', 'readwrite', (store) => store.put(r));
-    }
-  }
+// ---------------------------------------------------------------------------
+// Snapshot / replace (backup)
+// ---------------------------------------------------------------------------
+
+export async function getSnapshot() {
+  return withTx(['customers', 'projects', 'entries'], 'readonly', async ({ customers, projects, entries }) => ({
+    customers: await rq(customers.getAll()),
+    projects: await rq(projects.getAll()),
+    entries: await rq(entries.getAll())
+  }));
 }
+
+/** Replaces all customers, projects and entries with the given data (single transaction). */
+export async function replaceAll({ customers, projects, entries }) {
+  await withTx(['customers', 'projects', 'entries'], 'readwrite', async (stores) => {
+    await rq(stores.customers.clear());
+    await rq(stores.projects.clear());
+    await rq(stores.entries.clear());
+    for (const c of customers) await rq(stores.customers.put(c));
+    for (const p of projects) await rq(stores.projects.put(p));
+    for (const e of entries) await rq(stores.entries.put(e));
+  });
+  notifyChanged();
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
 
 export async function getSetting(key, defaultValue = null) {
-  const row = await tx('settings', 'readonly', (store) => store.get(key));
+  const row = await withTx('settings', 'readonly', ({ settings }) => rq(settings.get(key)));
   return row ? row.value : defaultValue;
 }
 
 export async function setSetting(key, value) {
-  await tx('settings', 'readwrite', (store) => store.put({ key, value }));
-}
-
-// ==============================================================================
-// FILE SYSTEM ACCESS API (Direct local 2-way CSV disk synchronization)
-// ==============================================================================
-
-export function hasFileSystemSupport() {
-  return typeof window.showDirectoryPicker === 'function';
-}
-
-export function isFolderBound() {
-  return boundDirectoryHandle !== null;
-}
-
-export function getBoundFolderName() {
-  return boundDirectoryHandle ? boundDirectoryHandle.name : null;
-}
-
-async function verifyPermission(fileHandle, readWrite = true) {
-  const options = { mode: readWrite ? 'readwrite' : 'read' };
-  if ((await fileHandle.queryPermission(options)) === 'granted') {
-    return true;
-  }
-  return (await fileHandle.requestPermission(options)) === 'granted';
-}
-
-export async function bindLocalDirectory() {
-  if (!hasFileSystemSupport()) {
-    throw new Error('Your browser does not support the File System Access API. Use Chrome or Edge.');
-  }
-  const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-  const hasPerm = await verifyPermission(dirHandle, true);
-  if (!hasPerm) throw new Error('Permission to write to the chosen directory was denied.');
-
-  boundDirectoryHandle = dirHandle;
-  await setSetting('dirHandle', dirHandle);
-
-  // Perform initial sync: write existing DB state or import CSVs
-  await syncToDisk();
-  return dirHandle.name;
-}
-
-export async function unbindLocalDirectory() {
-  boundDirectoryHandle = null;
-  await setSetting('dirHandle', null);
-}
-
-export async function syncToDisk() {
-  if (!boundDirectoryHandle) return false;
-  try {
-    const hasPerm = await verifyPermission(boundDirectoryHandle, true);
-    if (!hasPerm) return false;
-
-    const [projects, rawEntries] = await Promise.all([
-      getProjects(),
-      tx('entries', 'readonly', (store) => store.getAll())
-    ]);
-
-    const projHeaders = ['Id', 'Name', 'ColorHex', 'HourlyRate', 'IsActive', 'CreatedAt'];
-    const entryHeaders = ['Id', 'ProjectId', 'ProjectName', 'StartTime', 'EndTime', 'DurationSeconds', 'Note'];
-
-    const projRows = projects.map(p => ({
-      Id: p.id,
-      Name: p.name,
-      ColorHex: p.colorHex,
-      HourlyRate: p.hourlyRate,
-      IsActive: p.isActive,
-      CreatedAt: p.createdAt
-    }));
-
-    const entryRows = (rawEntries || []).map(e => ({
-      Id: e.id,
-      ProjectId: e.projectId,
-      ProjectName: e.projectName,
-      StartTime: e.startTime,
-      EndTime: e.endTime,
-      DurationSeconds: e.durationSeconds,
-      Note: e.note || ''
-    }));
-
-    // Write projects.csv
-    const projCsv = serializeCsv(projRows, projHeaders);
-    const projFile = await boundDirectoryHandle.getFileHandle('projects.csv', { create: true });
-    const projWritable = await projFile.createWritable();
-    await projWritable.write(projCsv);
-    await projWritable.close();
-
-    // Write entries.csv
-    const entryCsv = serializeCsv(entryRows, entryHeaders);
-    const entryFile = await boundDirectoryHandle.getFileHandle('entries.csv', { create: true });
-    const entryWritable = await entryFile.createWritable();
-    await entryWritable.write(entryCsv);
-    await entryWritable.close();
-
-    return true;
-  } catch (err) {
-    console.error('Error during disk synchronization:', err);
-    return false;
-  }
-}
-
-let syncTimeout = null;
-function autoSyncToDisk() {
-  if (!boundDirectoryHandle) return;
-  if (syncTimeout) clearTimeout(syncTimeout);
-  syncTimeout = setTimeout(() => {
-    syncToDisk();
-  }, 400);
-}
-
-/**
- * Fallback Manual CSV Export (Download directly through browser)
- */
-export async function downloadCsvFiles() {
-  const [projects, rawEntries] = await Promise.all([
-    getProjects(),
-    tx('entries', 'readonly', (store) => store.getAll())
-  ]);
-
-  const projHeaders = ['Id', 'Name', 'ColorHex', 'HourlyRate', 'IsActive', 'CreatedAt'];
-  const entryHeaders = ['Id', 'ProjectId', 'ProjectName', 'StartTime', 'EndTime', 'DurationSeconds', 'Note'];
-
-  const projRows = projects.map(p => ({
-    Id: p.id, Name: p.name, ColorHex: p.colorHex, HourlyRate: p.hourlyRate, IsActive: p.isActive, CreatedAt: p.createdAt
-  }));
-  const entryRows = (rawEntries || []).map(e => ({
-    Id: e.id, ProjectId: e.projectId, ProjectName: e.projectName, StartTime: e.startTime, EndTime: e.endTime, DurationSeconds: e.durationSeconds, Note: e.note || ''
-  }));
-
-  const projCsv = serializeCsv(projRows, projHeaders);
-  const entryCsv = serializeCsv(entryRows, entryHeaders);
-
-  triggerDownload(projCsv, 'projects.csv', 'text/csv;charset=utf-8;');
-  setTimeout(() => {
-    triggerDownload(entryCsv, 'entries.csv', 'text/csv;charset=utf-8;');
-  }, 300);
-}
-
-function triggerDownload(content, filename, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  await withTx('settings', 'readwrite', ({ settings }) => rq(settings.put({ key, value })));
 }
