@@ -64,6 +64,28 @@
         </div>
       </div>
 
+      <div id="bannerAway" class="banner banner-warning" role="alert" hidden>
+        <span id="txtAwayMsg"></span>
+        <div class="banner-actions">
+          <button id="btnAwayKeep" type="button" class="btn btn-primary btn-sm" data-i18n="away.keep">Keep this time</button>
+          <button id="btnAwayBreak" type="button" class="btn btn-secondary btn-sm" data-i18n="away.break">Remove as a break</button>
+          <button id="btnAwayStop" type="button" class="btn btn-secondary btn-sm"></button>
+        </div>
+      </div>
+
+      <div id="bannerLong" class="banner banner-warning" role="alert" hidden>
+        <span id="txtLongMsg"></span>
+        <div class="banner-actions">
+          <button id="btnLongKeep" type="button" class="btn btn-primary btn-sm" data-i18n="long.keep">Keep running</button>
+          <label class="inline-field">
+            <span data-i18n="long.stopAt">Stop at</span>
+            <input id="inpLongStop" type="time" step="60" class="form-input form-input-sm">
+          </label>
+          <button id="btnLongStopAt" type="button" class="btn btn-secondary btn-sm" data-i18n="long.stopAtGo">Stop at this time</button>
+          <button id="btnLongStopNow" type="button" class="btn btn-secondary btn-sm" data-i18n="long.stopNow">Stop now</button>
+        </div>
+      </div>
+
       <div id="bannerCheckIn" class="banner banner-warning" role="alert" hidden>
         <span id="txtCheckInMsg"></span>
         <div class="banner-actions">
@@ -71,6 +93,11 @@
           <button id="btnCheckInSwitch" type="button" class="btn btn-secondary btn-sm" data-i18n="checkin.switch">Switch project</button>
           <button id="btnCheckInStop" type="button" class="btn btn-secondary btn-sm" data-i18n="checkin.stop">Stop</button>
         </div>
+      </div>
+
+      <div id="bannerUpdate" class="banner banner-info" role="status" hidden>
+        <span data-i18n="banner.update">A new version of LocalLog is available.</span>
+        <button id="btnUpdateReload" type="button" class="btn btn-primary btn-sm" data-i18n="banner.updateButton">Reload</button>
       </div>
 
       <div id="bannerInstall" class="banner banner-info" role="status" hidden>
@@ -89,6 +116,12 @@
               <div id="txtStopwatch" class="stopwatch-display">00:00:00</div>
               <div id="txtActiveHint" class="timer-hint" data-i18n="timer.noneActive">No timer running</div>
             </div>
+          </div>
+          <div id="startAdjust" class="start-adjust" hidden>
+            <button id="btnStartedAt" type="button" class="link-btn" data-i18n-title="timer.editStart"></button>
+            <input id="inpStartedAt" type="time" step="60" class="form-input form-input-sm" data-i18n-aria-label="timer.startLabel" hidden>
+            <button id="btnBack5" type="button" class="btn btn-outline btn-sm" data-i18n="timer.back5" data-i18n-aria-label="timer.back5.label">−5 min</button>
+            <button id="btnBack15" type="button" class="btn btn-outline btn-sm" data-i18n="timer.back15" data-i18n-aria-label="timer.back15.label">−15 min</button>
           </div>
         </div>
 
@@ -175,7 +208,7 @@
         </div>
 
         <div class="table-responsive">
-          <table class="data-table" data-i18n-aria-label="entries.tableLabel" aria-label="Time entries">
+          <table class="data-table entries-table" data-i18n-aria-label="entries.tableLabel" aria-label="Time entries">
             <thead>
               <tr>
                 <th scope="col" data-i18n="col.date">Date</th>
@@ -193,6 +226,10 @@
             </thead>
             <tbody id="tbodyEntries"></tbody>
           </table>
+        </div>
+        <div id="moreRow" class="more-row" hidden>
+          <span id="txtMoreInfo"></span>
+          <button id="btnShowMore" type="button" class="btn btn-outline btn-sm" data-i18n="entries.showMore">Show more</button>
         </div>
         <p class="hint-line" data-i18n="entries.editHint">Click a cell to edit it. Enter saves, Esc cancels.</p>
 
@@ -251,6 +288,15 @@
           </label>
         </div>
 
+        <div class="card-section">
+          <h3 class="card-title" data-i18n="settings.snapTitle">Quarter hours</h3>
+          <p class="card-desc" data-i18n="settings.snapDesc">When this is on, the timer rounds the start and the end of each entry to the nearest quarter hour, for example 10:07 becomes 10:00. Times you enter or correct yourself are never rounded.</p>
+          <label class="check-label">
+            <input type="checkbox" id="chkSnap">
+            <span data-i18n="settings.snapLabel">Snap timer to quarter hours</span>
+          </label>
+        </div>
+
         <div id="pipCard" class="card-section" hidden>
           <h3 class="card-title" data-i18n="mini.title">Mini window</h3>
           <p class="card-desc" data-i18n="mini.desc">A small window that stays on top of your other programs and shows the running time. Handy when you work in Excel, Teams or other apps.</p>
@@ -278,6 +324,8 @@
             <li data-i18n="about.tech.backup">Backup: an optional folder (File System Access API) receives customers.csv, projects.csv, entries.csv and meta.csv. The files use UTF-8, a comma separator, ISO timestamps and decimal points.</li>
             <li data-i18n="about.tech.network">Network: a Content Security Policy with connect-src 'none' blocks the app from sending data anywhere. The app has no external dependencies and no telemetry.</li>
             <li data-i18n="about.tech.offline">Offline use: a service worker caches the app files. A new version is picked up automatically after an update.</li>
+            <li data-i18n="about.tech.sync">Several tabs: LocalLog tabs open in the same browser stay in sync through a BroadcastChannel; the database is always the single source for the running timer.</li>
+            <li data-i18n="about.tech.snap">Quarter hours: snapping the timer to a 15-minute grid is optional and off by default. Times you enter or correct yourself are never snapped.</li>
             <li data-i18n="about.tech.formats">Formats: numbers, dates and times follow your browser's regional settings. The interface language can be switched in the header.</li>
             <li><span data-i18n="about.tech.version">Version:</span> <span id="techVersion"></span></li>
           </ul>
@@ -351,6 +399,7 @@
             <div class="form-group">
               <label for="dlgCustomerRate" data-i18n="catalog.defaultRateLabel">Default hourly rate (EUR, optional)</label>
               <input type="text" id="dlgCustomerRate" class="form-input" inputmode="decimal" autocomplete="off">
+              <span id="dlgCustomerRatePreview" class="field-hint" aria-live="polite"></span>
             </div>
           </div>
         </div>
@@ -381,6 +430,7 @@
           <div class="form-group">
             <label for="dlgProjectRate" data-i18n="catalog.rateLabel">Hourly rate (EUR, optional)</label>
             <input type="text" id="dlgProjectRate" class="form-input" inputmode="decimal" autocomplete="off">
+            <span id="dlgProjectRatePreview" class="field-hint" aria-live="polite"></span>
             <span class="field-hint" data-i18n="catalog.rateHint">Leave empty to use the customer's default rate.</span>
           </div>
           <div class="form-group">

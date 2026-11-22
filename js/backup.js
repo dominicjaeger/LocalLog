@@ -153,14 +153,23 @@ export async function reconnectFolder() {
   return false;
 }
 
-/** Replaces the data in this browser with the backup files in the folder. Returns { ok } or { ok:false, error }. */
+/**
+ * Replaces the data in this browser with the backup files in the folder. The files are checked first.
+ * When the browser holds entries, a safety copy of them is downloaded before anything is replaced.
+ * Returns { ok, safetyCopy, warnings } or { ok: false, error, detail, row }.
+ */
 export async function loadFromFolder(dirHandle) {
   const texts = {};
   for (const name of Object.values(BACKUP_FILES)) texts[name] = await readText(dirHandle, name);
   const parsed = fromBackupFiles(texts, SCHEMA_VERSION);
   if (!parsed.ok) return parsed;
+
+  const current = await getSnapshot();
+  const safetyCopy = current.entries.length > 0;
+  if (safetyCopy) await downloadBackup();
+
   await replaceAll(parsed.data);
-  return { ok: true };
+  return { ok: true, safetyCopy, warnings: parsed.warnings || [] };
 }
 
 async function writeFileSafely(dirHandle, name, text) {

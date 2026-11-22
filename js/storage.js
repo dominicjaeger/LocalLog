@@ -8,18 +8,46 @@ const DB_VERSION = SCHEMA_VERSION;
 
 let dbPromise = null;
 const changeListeners = new Set();
+const remoteListeners = new Set();
 
-/** Called after customers, projects or entries changed (not for settings). */
+// Every write is announced to the other open tabs of LocalLog (BroadcastChannel stays inside the
+// browser; the page's security policy does not allow any network traffic).
+const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('locallog') : null;
+if (channel) {
+  channel.onmessage = (event) => {
+    const message = event.data;
+    if (!message || typeof message.type !== 'string') return;
+    for (const cb of remoteListeners) {
+      try { cb(message); } catch (err) { console.error(err); }
+    }
+  };
+}
+
+function broadcast(message) {
+  try { if (channel) channel.postMessage(message); } catch { /* other tabs simply do not hear it */ }
+}
+
+/** Called after customers, projects or entries changed in THIS tab (not for settings). */
 export function onDataChanged(cb) {
   changeListeners.add(cb);
   return () => changeListeners.delete(cb);
 }
 
+/** Called when ANOTHER tab changed data ({ type: 'changed' }) or a setting ({ type: 'settings', key }). */
+export function onRemoteChange(cb) {
+  remoteListeners.add(cb);
+  return () => remoteListeners.delete(cb);
+}
+
 function notifyChanged() {
+  broadcast({ type: 'changed' });
   for (const cb of changeListeners) {
     try { cb(); } catch (err) { console.error(err); }
   }
 }
+
+// Settings that only matter inside one tab are not announced.
+const LOCAL_ONLY_SETTINGS = new Set(['lastSeenAt', 'lastBackupAt', 'dirHandle', 'persistGranted', 'welcomeSeen']);
 
 function openDb() {
   if (dbPromise) return dbPromise;
@@ -211,14 +239,19 @@ export async function addEntry({ projectId, startTime, endTime = '', note = '', 
   return record;
 }
 
+function mergeEntry(current, patch, id) {
+  const next = { ...current, ...patch, id, updatedAt: nowIso() };
+  if (typeof next.note === 'string') next.note = next.note.replace(/[\r\n]+/g, ' ');
+  if (typeof next.ticket === 'string') next.ticket = next.ticket.trim();
+  return next;
+}
+
 /** Read-modify-write: only the fields in `patch` change; everything else is kept. */
 export async function updateEntry(id, patch) {
   const updated = await withTx('entries', 'readwrite', async ({ entries }) => {
     const current = await rq(entries.get(id));
     if (!current) throw new Error('Entry not found');
-    const next = { ...current, ...patch, id, updatedAt: nowIso() };
-    if (typeof next.note === 'string') next.note = next.note.replace(/[\r\n]+/g, ' ');
-    if (typeof next.ticket === 'string') next.ticket = next.ticket.trim();
+    const next = mergeEntry(current, patch, id);
     await rq(entries.put(next));
     return next;
   });
@@ -226,9 +259,56 @@ export async function updateEntry(id, patch) {
   return updated;
 }
 
+/**
+ * Like updateEntry, but only while the entry is still open (empty endTime). The check happens inside
+ * the same transaction as the write, so another tab that closed or deleted the entry in the meantime
+ * is never overwritten. Returns the saved entry, or null when nothing was written.
+ */
+export async function updateEntryIfOpen(id, patch) {
+  const updated = await withTx('entries', 'readwrite', async ({ entries }) => {
+    const current = await rq(entries.get(id));
+    if (!current || current.endTime) return null;
+    const next = mergeEntry(current, patch, id);
+    await rq(entries.put(next));
+    return next;
+  });
+  if (updated) notifyChanged();
+  return updated;
+}
+
+/**
+ * Opens a closed entry again (resume right after a pause). Only when its end time is still the one that
+ * was written by the pause and no other entry is open. Returns the entry or null.
+ */
+export async function reopenEntry(id, expectedEndTime) {
+  const reopened = await withTx('entries', 'readwrite', async ({ entries }) => {
+    const current = await rq(entries.get(id));
+    if (!current || current.endTime !== expectedEndTime) return null;
+    const all = await rq(entries.getAll());
+    if (all.some((e) => !e.endTime)) return null;
+    const next = { ...current, endTime: '', updatedAt: nowIso() };
+    await rq(entries.put(next));
+    return next;
+  });
+  if (reopened) notifyChanged();
+  return reopened;
+}
+
 export async function deleteEntry(id) {
   await withTx('entries', 'readwrite', ({ entries }) => rq(entries.delete(id)));
   notifyChanged();
+}
+
+/** Deletes an entry only while it is still open. Returns true when it was deleted. */
+export async function deleteEntryIfOpen(id) {
+  const deleted = await withTx('entries', 'readwrite', async ({ entries }) => {
+    const current = await rq(entries.get(id));
+    if (!current || current.endTime) return false;
+    await rq(entries.delete(id));
+    return true;
+  });
+  if (deleted) notifyChanged();
+  return deleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,4 +347,5 @@ export async function getSetting(key, defaultValue = null) {
 
 export async function setSetting(key, value) {
   await withTx('settings', 'readwrite', ({ settings }) => rq(settings.put({ key, value })));
+  if (!LOCAL_ONLY_SETTINGS.has(key)) broadcast({ type: 'settings', key });
 }

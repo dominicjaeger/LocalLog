@@ -105,7 +105,17 @@ function openCustomerDialog(customer) {
   $('dlgCustomerName').value = customer ? customer.name : '';
   $('dlgCustomerColor').value = customer ? customer.colorHex : nextColor();
   $('dlgCustomerRate').value = customer ? amountToInput(customer.defaultRate) : '';
+  showRatePreview('dlgCustomerRate', 'dlgCustomerRatePreview');
   $('dlgCustomer').showModal();
+}
+
+/** Shows how a typed rate is understood, so that a mistake such as "1.234" is visible at once. */
+function showRatePreview(inputId, previewId) {
+  const preview = $(previewId);
+  const parsed = parseAmount($(inputId).value);
+  preview.classList.toggle('is-error', !parsed.valid);
+  if (!parsed.valid) preview.textContent = t('err.invalidRate');
+  else preview.textContent = parsed.value === null ? '' : t('catalog.ratePreview', { rate: formatRate(parsed.value) });
 }
 
 const PALETTE = ['#0078D4', '#107C10', '#8764B8', '#D83B01', '#008272', '#B4009E', '#986F0B', '#486991'];
@@ -135,6 +145,7 @@ function openProjectDialog(project, customerId = null) {
   $('dlgProjectTitle').textContent = t(project ? 'catalog.editProject' : 'catalog.addProject');
   $('dlgProjectName').value = project ? project.name : '';
   $('dlgProjectRate').value = project ? amountToInput(project.hourlyRate) : '';
+  showRatePreview('dlgProjectRate', 'dlgProjectRatePreview');
   $('dlgProjectTemplate').value = project && project.ticketUrlTemplate ? project.ticketUrlTemplate : '';
   $('dlgProject').showModal();
 }
@@ -158,6 +169,8 @@ export function initCatalog() {
   $('btnAddCustomer').addEventListener('click', () => openCustomerDialog(null));
   $('formCustomer').addEventListener('submit', (e) => { e.preventDefault(); saveCustomer().catch((err) => { console.error(err); toast(errorText('saveFailed'), 'error'); }); });
   $('formProject').addEventListener('submit', (e) => { e.preventDefault(); saveProject().catch((err) => { console.error(err); toast(errorText('saveFailed'), 'error'); }); });
+  $('dlgCustomerRate').addEventListener('input', () => showRatePreview('dlgCustomerRate', 'dlgCustomerRatePreview'));
+  $('dlgProjectRate').addEventListener('input', () => showRatePreview('dlgProjectRate', 'dlgProjectRatePreview'));
   for (const id of ['btnDlgCustomerCancel', 'btnDlgCustomerClose']) $(id).addEventListener('click', () => $('dlgCustomer').close());
   for (const id of ['btnDlgProjectCancel', 'btnDlgProjectClose']) $(id).addEventListener('click', () => $('dlgProject').close());
 }

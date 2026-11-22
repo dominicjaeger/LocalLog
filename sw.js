@@ -1,7 +1,7 @@
 // LocalLog service worker: keeps the app files for offline use.
 // IMPORTANT: VERSION must match APP_VERSION in js/version.js. Bump both together; a new
 // version changes this file, which makes the browser install the new worker and fresh files.
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const CACHE_NAME = 'locallog-' + VERSION;
 
 const ASSETS_TO_CACHE = [
@@ -19,6 +19,7 @@ const ASSETS_TO_CACHE = [
   './js/timer.js',
   './js/ambient.js',
   './js/core/time.js',
+  './js/core/rounding.js',
   './js/core/format.js',
   './js/core/csv.js',
   './js/core/export.js',

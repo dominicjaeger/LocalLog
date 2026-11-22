@@ -7,18 +7,23 @@ import { fillProjectSelect } from './picker.js';
 import { createExportMenu } from './export.js';
 import {
   entryDurationSeconds, formatClock, rangeFor, inRange, dayRange, totalSeconds, secondsToHours,
-  overlappingEntries, toDateInputValue, toTimeInputValue, combineDateTime
+  overlappingEntries, toDateInputValue, toTimeInputValue, combineDateTime, latestOccurrenceUpTo
 } from '../core/time.js';
 import { formatDate, formatTime, formatHours, formatMoney } from '../core/format.js';
 import { resolveEntry } from '../core/export.js';
-import { validateTimes, buildTicketUrl } from '../core/validate.js';
-import { addEntry, updateEntry, deleteEntry } from '../storage.js';
+import { validateTimes, validateStartNotFuture, buildTicketUrl } from '../core/validate.js';
+import { addEntry, updateEntry, updateEntryIfOpen, deleteEntry } from '../storage.js';
 import { requestPersistence } from '../backup.js';
 
 const $ = (id) => document.getElementById(id);
 
+// At most this many rows are drawn; "Show more" adds another page. Totals always use all entries.
+const ROW_PAGE = 200;
+
 let editing = null;
 let renderPending = false;
+let visibleRows = ROW_PAGE;
+let adjustStart = async () => {};
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -36,9 +41,14 @@ export function renderEntries() {
   $('selRange').value = state.settings.exportRange;
 
   const range = rangeFor(state.settings.exportRange, now, 0);
-  const rows = state.entries
+  const matching = state.entries
     .filter((e) => !e.endTime || inRange(e, range))
     .sort((a, b) => Date.parse(b.startTime) - Date.parse(a.startTime));
+  // The running entry is always drawn, even when it is not within the first rows.
+  const rows = matching.slice(0, visibleRows);
+  for (const open of matching) {
+    if (!open.endTime && !rows.includes(open)) rows.unshift(open);
+  }
 
   const tbody = clear($('tbodyEntries'));
   if (rows.length === 0) {
@@ -46,11 +56,15 @@ export function renderEntries() {
   }
   for (const entry of rows) tbody.append(buildRow(entry, now, showMoney));
 
+  const moreRow = $('moreRow');
+  moreRow.hidden = matching.length <= visibleRows;
+  if (!moreRow.hidden) $('txtMoreInfo').textContent = t('entries.showing', { shown: visibleRows, total: matching.length });
+
   renderToday();
 }
 
 function editableCell(field, label, ...content) {
-  return h('td', { class: 'editable', dataset: { field }, tabindex: '0', 'aria-label': label }, ...content);
+  return h('td', { class: 'editable', dataset: { field, label: t('col.' + field) }, tabindex: '0', 'aria-label': label }, ...content);
 }
 
 function buildRow(entry, now, showMoney) {
@@ -66,7 +80,8 @@ function buildRow(entry, now, showMoney) {
     : editableCell(field, t(`edit.${field}`), ...content));
 
   tr.append(lock('date', formatDate(start)));
-  tr.append(lock('start', formatTime(start)));
+  // The start of a running entry can be corrected; date, end and project stay locked while it runs.
+  tr.append(editableCell('start', t('edit.start'), formatTime(start)));
   tr.append(running
     ? h('td', { dataset: { field: 'end' } }, h('span', { class: 'pill pill-running' }, t('status.running')))
     : lock('end', formatTime(entry.endTime)));
@@ -78,16 +93,23 @@ function buildRow(entry, now, showMoney) {
     : h('span', { class: 'placeholder' }, '–');
   tr.append(editableCell('ticket', t('edit.ticket'), ticketContent));
 
-  tr.append(h('td', { dataset: { field: 'duration' } }, h('code', {}, formatClock(r.seconds))));
-  tr.append(h('td', { dataset: { field: 'hours' } }, h('strong', {}, formatHours(r.hours))));
+  tr.append(h('td', { dataset: { field: 'duration', label: t('col.duration') } }, h('code', {}, formatClock(r.seconds))));
+  tr.append(h('td', { dataset: { field: 'hours', label: t('col.hours') } }, h('strong', {}, formatHours(r.hours))));
   if (showMoney) {
-    tr.append(h('td', {}, r.rate === null ? '' : formatMoney(r.rate)));
-    tr.append(h('td', { dataset: { field: 'value' } }, r.value === null ? '' : formatMoney(r.value)));
+    tr.append(h('td', { dataset: { field: 'rate', label: t('col.rate') } }, r.rate === null ? '' : formatMoney(r.rate)));
+    tr.append(h('td', { dataset: { field: 'value', label: t('col.value') } }, r.value === null ? '' : formatMoney(r.value)));
   }
   tr.append(editableCell('note', t('edit.note'), entry.note || h('span', { class: 'placeholder' }, '–')));
 
   tr.append(h('td', { class: 'cell-actions' }, running ? null
     : h('button', { type: 'button', class: 'btn btn-sm btn-ghost btn-del', 'aria-label': t('entries.delete'), title: t('entries.delete') }, icon('delete'))));
+
+  // The quick buttons for the running entry; only shown in the phone layout (the timer card has them too).
+  if (running) {
+    tr.append(h('td', { class: 'cell-adjust' },
+      h('button', { type: 'button', class: 'btn btn-sm btn-outline btn-adjust', dataset: { minutes: '5' }, 'aria-label': t('timer.back5.label') }, t('timer.back5')),
+      h('button', { type: 'button', class: 'btn btn-sm btn-outline btn-adjust', dataset: { minutes: '15' }, 'aria-label': t('timer.back15.label') }, t('timer.back15'))));
+  }
   return tr;
 }
 
@@ -159,6 +181,15 @@ async function commitEdit(entry, field, value) {
     if (shift === 0) return true;
     // Moving to another day keeps start time and duration.
     patch = { startTime: newStart.toISOString(), endTime: new Date(Date.parse(entry.endTime) + shift).toISOString() };
+  } else if (field === 'start' && !entry.endTime) {
+    // Running entry: a typed time later than now means yesterday, so corrections across midnight work.
+    if (!timeMatch) return fail('invalidTime');
+    if (value === toTimeInputValue(new Date(entry.startTime))) return true;
+    const moved = latestOccurrenceUpTo(Date.now(), value);
+    if (!moved) return fail('invalidTime');
+    const problem = validateStartNotFuture(moved.getTime(), Date.now());
+    if (problem) return fail(problem);
+    patch = { startTime: moved.toISOString() };
   } else if (field === 'start' || field === 'end') {
     const key = field === 'start' ? 'startTime' : 'endTime';
     const base = new Date(entry[key]);
@@ -183,9 +214,18 @@ async function commitEdit(entry, field, value) {
     const error = validateTimes(merged.startTime, merged.endTime);
     if (error) return fail(error);
     if (overlappingEntries(merged, state.entries).length > 0) toast(t('entry.overlapWarning'), 'warning');
+  } else if (patch.startTime && overlappingEntries(merged, state.entries).length > 0) {
+    // Overlap with another entry only gives a warning; nothing else is changed.
+    toast(t('entry.overlapWarning'), 'warning');
   }
 
   try {
+    if (!entry.endTime) {
+      // Running entry: only written while it is still open (another window may have stopped it).
+      const saved = await updateEntryIfOpen(entry.id, patch);
+      if (!saved) toast(t('entry.changedElsewhere'), 'warning');
+      return true;
+    }
     await updateEntry(entry.id, patch);
     return true;
   } catch (err) {
@@ -201,7 +241,7 @@ function startEdit(td) {
   const field = td.dataset.field;
   const entry = state.entries.find((e) => e.id === id);
   if (!entry) return;
-  if (!entry.endTime && field !== 'note' && field !== 'ticket') return;
+  if (!entry.endTime && field !== 'note' && field !== 'ticket' && field !== 'start') return;
 
   const editor = makeEditor(field, entry);
   editing = { id, field, done: false };
@@ -303,11 +343,13 @@ async function saveDialog() {
 // Wiring
 // ---------------------------------------------------------------------------
 
-export function initEntries(getPreferredProjectId) {
+export function initEntries({ getPreferredProjectId, adjustStart: adjust }) {
+  adjustStart = adjust;
   $('exportMenuSlot').append(createExportMenu(() => ({ kind: state.settings.exportRange })));
 
   $('selRange').addEventListener('change', async (e) => {
     await saveSetting('exportRange', e.target.value);
+    visibleRows = ROW_PAGE;
     renderEntries();
   });
   $('chkIncludeRates').addEventListener('change', async (e) => {
@@ -316,10 +358,16 @@ export function initEntries(getPreferredProjectId) {
     document.dispatchEvent(new CustomEvent('rates-toggled'));
   });
   $('btnAddEntry').addEventListener('click', () => openAddDialog(getPreferredProjectId()));
+  $('btnShowMore').addEventListener('click', () => {
+    visibleRows += ROW_PAGE;
+    renderEntries();
+  });
 
   const tbody = $('tbodyEntries');
   tbody.addEventListener('click', (e) => {
     if (e.target.closest('a')) return;
+    const quick = e.target.closest('.btn-adjust');
+    if (quick) { adjustStart(Number(quick.dataset.minutes)); return; }
     const del = e.target.closest('.btn-del');
     if (del) { handleDelete(Number(del.closest('tr').dataset.id)); return; }
     const td = e.target.closest('td.editable');

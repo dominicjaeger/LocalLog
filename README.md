@@ -12,14 +12,29 @@ The interface is available in **English** and **German** (switch with EN | DE in
 
 * Track time with a timer, or add entries by hand.
 * Organise work by **customer → project**, and add an optional **ticket** (Jira or any other system) to each entry. If a project has a ticket link, ticket numbers become clickable.
-* **Pause and resume**: each pause closes the current entry and resuming starts a new one for the same project, note and ticket.
+* **Pause and resume**: each pause closes the current entry and resuming starts a new one for the same project, note and ticket. Resuming within a minute simply continues the same entry.
+* **Forgot to start?** Move the start back with the **−5 min** and **−15 min** buttons, or click the start time next to the stopwatch and type a new one.
 * **Edit entries directly in the table**: click a cell, change it, press Enter (Esc cancels).
 * **Export** the table: copy it and paste into Excel, or download a CSV file. Choose today, this week, this month or everything.
 * **Weekly overview** with hours per customer and project (Monday to Sunday).
 * Optional **rates** (per customer, per project) and values in EUR.
 * Optional **reminder** every 30 or 60 minutes, and an optional always-on-top mini window (Chrome and Edge).
+* Works on a **phone** too (the entries are shown as cards).
 
 Numbers, dates and times follow your browser's regional settings.
+
+---
+
+## How it works
+
+* **Keyboard shortcuts:** Alt+S start or pause, Alt+C copy the table, Alt+P mini window.
+* **Changing the project while a timer runs:** within the first 2 minutes the running entry is corrected (a short message says so). After that, the entry ends and a new one starts for the new project.
+* **−5 / −15 min and the start time:** these move the start of the running entry. A typed time that has not happened yet today means yesterday. If the new start overlaps another entry, you get a warning and nothing else is changed.
+* **Pause and resume:** a pause closes the entry. Resuming within 1 minute continues it; later, a new entry starts.
+* **Prompts:** after a reload, LocalLog only asks about a running timer when the app was closed for more than 5 minutes. If the computer was asleep for more than 10 minutes, it asks whether to keep that time, remove it as a break or stop at the start of the gap. A timer that runs longer than 10 hours or across midnight asks whether you are still working.
+* **Snap to quarter hours (optional, Settings):** the timer rounds start and stop to the nearest quarter hour. Manual edits are never rounded.
+* **Several tabs:** all open LocalLog tabs show the same data and the same timer; a change in one tab appears in the others within a second.
+* **Updates:** when a new version is available, a banner offers a Reload button. LocalLog never reloads by itself.
 
 ---
 
@@ -52,6 +67,9 @@ manifest.webmanifest  Install information
 css/app.css           Styles (no inline styles anywhere)
 css/pip.css           Styles for the mini window
 icons/                App icons
+tools/                Developer tools (check.mjs, serve.mjs)
+LICENSE               MIT License
+CHANGELOG.md          Version history
 js/version.js         APP_VERSION and SCHEMA_VERSION
 js/app.js             Start-up, timer controls, header, tabs, shortcuts
 js/i18n.js            English and German texts
@@ -60,7 +78,7 @@ js/storage.js         IndexedDB access (database "locallog")
 js/backup.js          Backup folder, downloads, storage protection
 js/timer.js           Timer (pause = segment)
 js/ambient.js         Mini window, tab icon, title, reminder
-js/core/              Pure logic without DOM access (time, format, csv, export, backup, validate)
+js/core/              Pure logic without DOM access (time, rounding, format, csv, export, backup, validate)
 js/ui/                Screen code
 ```
 
@@ -72,19 +90,23 @@ The modules in `js/core/` never touch the DOM so that unit tests can be added la
 
 ### Run locally
 
-Service workers and ES modules need a web server (opening `index.html` as a file does not work). Use any static server, for example:
+Service workers and ES modules need a web server (opening `index.html` as a file does not work). With Node installed (no packages needed):
 
 ```bash
-npx serve .
+node tools/serve.mjs
 ```
 
-or
+then open <http://localhost:8090/>. The server sends `Cache-Control: no-cache`; pass another port as an argument (`node tools/serve.mjs 8123`).
+
+**Offline cache while developing:** the service worker keeps the app files, so a normal reload can show old code. Either bump the version (see below) or, in the browser's developer tools, open *Application → Service Workers* and tick *Update on reload*.
+
+### Check before a release
 
 ```bash
-python -m http.server 8080
+node tools/check.mjs
 ```
 
-then open the printed address (for example `http://localhost:8080`).
+It fails when `APP_VERSION` and the `VERSION` in `sw.js` differ, when a file in `js/` or `css/` is missing from `ASSETS_TO_CACHE`, or when an entry in that list does not exist.
 
 ### Bump the version
 
@@ -93,7 +115,7 @@ The version is kept in two places that must always be changed together:
 1. `APP_VERSION` in `js/version.js`
 2. `VERSION` at the top of `sw.js`
 
-A new version changes `sw.js`, so the browser installs the new service worker, which loads fresh files into a new cache (`locallog-<version>`) and removes the old one. Open pages reload once when the new version takes over. If you add or remove a file, update `ASSETS_TO_CACHE` in `sw.js` as well. If the data layout changes, increase `SCHEMA_VERSION`.
+A new version changes `sw.js`, so the browser installs the new service worker, which loads fresh files into a new cache (`locallog-<version>`) and removes the old one. Open pages show a Reload banner when the new version takes over. If you add or remove a file, update `ASSETS_TO_CACHE` in `sw.js` as well; `node tools/check.mjs` tells you if you forgot. If the data layout changes, increase `SCHEMA_VERSION`.
 
 ### Deploy to GitHub Pages
 

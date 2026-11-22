@@ -909,3 +909,126 @@ dialog.modal-dialog::backdrop {
   .week-row { grid-template-columns: 1fr 70px 80px; }
   .week-row .bar { display: none; }
 }
+
+/* ==============================================================================
+   ROUND 2: start time, banners, paging, phone layout
+   ============================================================================== */
+.banner { flex-wrap: wrap; }
+.banner .inline-field { color: inherit; }
+.form-input-sm { min-height: 28px; padding: 3px 8px; font-size: 12.5px; width: auto; }
+.field-hint.is-error { color: var(--danger); font-weight: 600; }
+
+/* A time inside the table header's hidden text must not stretch the page */
+.cell-actions { position: relative; }
+
+/* Start time next to the stopwatch */
+.timer-header { flex-wrap: wrap; gap: 10px; }
+.start-adjust { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 4px 2px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+.link-btn:hover { color: var(--primary-hover); }
+
+/* Paging row under the entries table */
+.more-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 10px; font-size: 12.5px; color: var(--text-secondary); }
+
+/* The quick buttons inside a running row exist only in the phone layout */
+.data-table td.cell-adjust { display: none; }
+
+/* ---- Phone layout ---- */
+@media (max-width: 640px) {
+  body { padding: 14px 12px 32px; }
+  .tab-panel { padding: 14px; }
+  .bento-card { padding: 16px; }
+  .stopwatch-display { font-size: 32px; }
+  .hotkey-hint { display: none; }
+  .timer-actions { flex-wrap: wrap; }
+  .app-header { align-items: flex-start; }
+
+  /* Touch targets of at least 40 px */
+  .btn, .btn-sm { min-height: 40px; }
+  .form-input, .form-select, .form-select-sm, .form-input-sm { min-height: 40px; font-size: 14px; }
+  .tab-btn { padding: 12px 14px; min-height: 44px; }
+  .lang-btn { min-height: 38px; }
+  .btn-theme { width: 40px; height: 40px; min-height: 40px; }
+  .check-label { min-height: 40px; }
+  .check-label input { width: 20px; height: 20px; }
+  .link-btn { min-height: 40px; padding: 8px 4px; }
+  .menu-item { min-height: 40px; }
+
+  .banner { align-items: flex-start; }
+  .week-summary { flex-wrap: wrap; }
+  .week-row { grid-template-columns: minmax(0, 1fr) 64px 76px; gap: 8px; }
+  .data-list { grid-template-columns: 1fr; gap: 0; }
+  .data-list dd { margin-bottom: 6px; }
+  .form-group { min-width: 0; }
+  .form-row > * { min-width: 0; }
+  dialog.modal-dialog { padding: 18px; }
+  .modal-footer { flex-wrap: wrap; }
+  .toolbar-group { gap: 8px; }
+
+  /* The entries table becomes a list of cards. */
+  .table-responsive { overflow: visible; border: none; border-radius: 0; }
+  .entries-table, .entries-table tbody { display: block; width: 100%; }
+  .entries-table thead { display: none; }
+  .entries-table tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: var(--radius-md);
+  }
+  .entries-table tbody tr.row-running { background: var(--primary-subtle); border-color: var(--primary-border); }
+  .entries-table td { display: block; padding: 4px 0; border: 0; min-width: 0; overflow-wrap: anywhere; }
+  .entries-table td:empty { display: none; }
+  .entries-table td.editable { min-height: 40px; padding: 9px 6px; margin: 0 -6px; border-radius: var(--radius-sm); display: flex; align-items: center; }
+  .entries-table td.editing { flex: 1 1 100%; }
+  .entries-table td.empty-row { flex: 1 1 100%; }
+
+  /* Line 1: date, times, delete. Line 2: customer and project. Then ticket, note, duration, hours. */
+  .entries-table td[data-field="date"] { order: 1; font-weight: 600; }
+  .entries-table td[data-field="start"] { order: 2; }
+  .entries-table td[data-field="end"] { order: 3; }
+  .entries-table td[data-field="end"]::before { content: "\2013"; margin-right: 10px; color: var(--text-muted); }
+  .entries-table td.cell-actions { order: 4; margin-left: auto; width: auto; }
+  .entries-table td[data-field="project"] { order: 5; flex: 1 1 100%; font-weight: 600; }
+  .entries-table td[data-field="ticket"] { order: 6; flex: 1 1 100%; }
+  .entries-table td[data-field="note"] { order: 7; flex: 1 1 100%; }
+  .entries-table td[data-field="duration"] { order: 8; }
+  .entries-table td[data-field="hours"] { order: 9; }
+  .entries-table td[data-field="rate"] { order: 10; }
+  .entries-table td[data-field="value"] { order: 11; }
+  .entries-table td.cell-adjust { order: 12; display: flex; flex: 1 1 100%; gap: 8px; padding-top: 6px; }
+
+  .entries-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-right: 6px;
+    white-space: nowrap;
+  }
+  .entries-table td[data-field="date"]::before,
+  .entries-table td[data-field="project"]::before,
+  .entries-table td[data-field="start"]::before { content: none; }
+  .entries-table td[data-field="end"][data-label]::before { content: "\2013"; margin-right: 10px; }
+  .entries-table td[data-field="duration"], .entries-table td[data-field="hours"],
+  .entries-table td[data-field="rate"], .entries-table td[data-field="value"] { margin-right: 14px; }
+}

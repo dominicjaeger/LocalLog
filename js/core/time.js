@@ -118,6 +118,74 @@ export function combineDateTime(dateStr, timeStr) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+// ---- Time of day (for typed start and stop times) ----
+
+/** Reads "H:mm" or "HH:mm" (seconds allowed, ignored). Returns { hours, minutes } or null. */
+export function parseTimeOfDay(text) {
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(text ?? '').trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  return hours > 23 || minutes > 59 ? null : { hours, minutes };
+}
+
+/**
+ * The most recent moment up to `nowMs` that shows the typed clock time: today, or yesterday when
+ * the time has not happened yet today. So 23:50 typed just after midnight means the previous day.
+ */
+export function latestOccurrenceUpTo(nowMs, text) {
+  const tod = parseTimeOfDay(text);
+  if (!tod) return null;
+  const now = new Date(nowMs);
+  const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), tod.hours, tod.minutes, 0, 0);
+  if (candidate.getTime() > nowMs) candidate.setDate(candidate.getDate() - 1);
+  return candidate;
+}
+
+/** The first moment after `afterMs` that shows the typed clock time (same day, or the next day). */
+export function firstOccurrenceAfter(afterMs, text) {
+  const tod = parseTimeOfDay(text);
+  if (!tod) return null;
+  const after = new Date(afterMs);
+  const candidate = new Date(after.getFullYear(), after.getMonth(), after.getDate(), tod.hours, tod.minutes, 0, 0);
+  if (candidate.getTime() <= afterMs) candidate.setDate(candidate.getDate() + 1);
+  return candidate;
+}
+
+// ---- Long-running timer ----
+
+/** A running timer is "long-running" after this much time (named constant, R15). */
+export const LONG_RUNNING_MS = 10 * 3600 * 1000;
+
+/** True for a running entry that passed 10 hours or that started before today. */
+export function isLongRunning(entry, now = new Date()) {
+  if (!entry || entry.endTime) return false;
+  const start = parseMs(entry.startTime);
+  if (start === null) return false;
+  return now.getTime() - start > LONG_RUNNING_MS || start < startOfDay(now).getTime();
+}
+
+// ---- More than one open entry ----
+
+/**
+ * When more than one entry is open, only the newest may stay open. The others are closed:
+ * at the start of the next open entry, or at their own start + 1 minute if that is earlier.
+ * Returns the patches [{ id, endTime }]; nothing is written here and nothing is deleted.
+ */
+export function repairOpenEntries(entries) {
+  const open = entries
+    .filter((e) => !e.endTime && parseMs(e.startTime) !== null)
+    .sort((a, b) => parseMs(a.startTime) - parseMs(b.startTime));
+  const patches = [];
+  for (let i = 0; i < open.length - 1; i += 1) {
+    const ownStart = parseMs(open[i].startTime);
+    const nextStart = parseMs(open[i + 1].startTime);
+    const endMs = Math.max(Math.min(nextStart, ownStart + 60000), ownStart + 1000);
+    patches.push({ id: open[i].id, endTime: new Date(endMs).toISOString() });
+  }
+  return patches;
+}
+
 // ---- Segments (pause = segment) ----
 
 /**

@@ -1,7 +1,11 @@
 // Pure backup file format (customers.csv, projects.csv, entries.csv, meta.csv).
-// Locale-neutral: UTF-8, ',' separator, ISO timestamps, '.' decimals. No DOM access.
+// Written locale-neutral: UTF-8, ',' separator, ISO timestamps, '.' decimals. Reading is more
+// forgiving so that files that were opened and saved in Excel (';' separator, BOM) still load.
+// No DOM access.
 
 import { parseCsv, serializeCsv } from './csv.js';
+import { parseMs, repairOpenEntries } from './time.js';
+import { validateColor, validateTicketTemplate } from './validate.js';
 
 export const BACKUP_FILES = {
   customers: 'customers.csv',
@@ -13,6 +17,10 @@ export const BACKUP_FILES = {
 const CUSTOMER_HEADERS = ['Id', 'Name', 'ColorHex', 'DefaultRate', 'IsActive', 'CreatedAt'];
 const PROJECT_HEADERS = ['Id', 'CustomerId', 'Name', 'HourlyRate', 'TicketUrlTemplate', 'IsActive', 'CreatedAt'];
 const ENTRY_HEADERS = ['Id', 'ProjectId', 'StartTime', 'EndTime', 'Note', 'Ticket', 'CreatedAt', 'UpdatedAt'];
+
+const DEFAULT_COLOR = '#0078D4';
+// A full ISO timestamp with a time zone, as LocalLog writes it. Excel turns these into local dates.
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/;
 
 const num = (v) => (v === null || v === undefined ? '' : String(v));
 const flag = (v) => (v ? '1' : '0');
@@ -36,16 +44,31 @@ export function toBackupFiles({ customers, projects, entries, appVersion, schema
   };
 }
 
+/** ',' or ';', decided by the header line (the headers themselves never contain either). */
+export function detectSeparator(text) {
+  const clean = String(text ?? '').replace(/^﻿/, '');
+  const firstLine = clean.split(/\r?\n/, 1)[0] || '';
+  return firstLine.includes(';') && !firstLine.includes(',') ? ';' : ',';
+}
+
+const readRows = (text) => parseCsv(text, detectSeparator(text));
+
+// Excel with a German region writes decimals as "85,5". A single comma between digits is accepted.
 const toNumberOrNull = (v) => {
-  if (v === '' || v === undefined) return null;
-  const n = Number(v);
+  const s = String(v ?? '').trim();
+  if (s === '') return null;
+  const n = Number(/^-?\d+,\d+$/.test(s) ? s.replace(',', '.') : s);
   return Number.isFinite(n) ? n : NaN;
 };
-const toBool = (v) => v === '1' || String(v).toLowerCase() === 'true';
+const toBool = (v) => v === '1' || String(v).trim().toLowerCase() === 'true';
+const isIso = (v) => ISO_TIMESTAMP.test(String(v ?? '').trim()) && parseMs(String(v).trim()) !== null;
 
 /**
  * Parses backup files. `texts` maps file name to text.
- * Returns { ok: true, data: { customers, projects, entries }, meta } or { ok: false, error }.
+ * Returns { ok: true, data: { customers, projects, entries }, meta, warnings } or
+ * { ok: false, error, detail?, row? }. `detail` is the file name and `row` the data row (1 = first row
+ * under the header). `warnings` is a list of { code, count } for things that were repaired:
+ * 'badColor', 'badTemplate', 'extraOpen'.
  */
 export function fromBackupFiles(texts, supportedSchemaVersion) {
   for (const key of ['customers', 'projects', 'entries']) {
@@ -54,49 +77,86 @@ export function fromBackupFiles(texts, supportedSchemaVersion) {
 
   const meta = {};
   if (typeof texts[BACKUP_FILES.meta] === 'string') {
-    for (const row of parseCsv(texts[BACKUP_FILES.meta])) meta[row.Key] = row.Value;
+    for (const row of readRows(texts[BACKUP_FILES.meta])) meta[row.Key] = row.Value;
   }
   if (meta.SchemaVersion !== undefined && Number(meta.SchemaVersion) > supportedSchemaVersion) {
     return { ok: false, error: 'newerSchema' };
   }
 
-  const bad = (detail) => ({ ok: false, error: 'badData', detail });
+  const fail = (error, detail, row) => ({ ok: false, error, detail, row });
+  const warn = { badColor: 0, badTemplate: 0, extraOpen: 0 };
 
+  // ---- customers ----
   const customers = [];
-  for (const r of parseCsv(texts[BACKUP_FILES.customers])) {
+  const customerIds = new Set();
+  let rowNo = 0;
+  for (const r of readRows(texts[BACKUP_FILES.customers])) {
+    rowNo += 1;
     const id = Number(r.Id);
     const defaultRate = toNumberOrNull(r.DefaultRate);
-    if (!Number.isInteger(id) || id <= 0 || !r.Name || Number.isNaN(defaultRate)) return bad(BACKUP_FILES.customers);
-    customers.push({ id, name: r.Name, colorHex: r.ColorHex || '#0078D4', defaultRate, isActive: toBool(r.IsActive), createdAt: r.CreatedAt });
+    if (!Number.isInteger(id) || id <= 0 || !r.Name || Number.isNaN(defaultRate)) return fail('badData', BACKUP_FILES.customers, rowNo);
+    if (customerIds.has(id)) return fail('duplicateId', BACKUP_FILES.customers, rowNo);
+    customerIds.add(id);
+    let colorHex = String(r.ColorHex || '').trim();
+    if (validateColor(colorHex)) { colorHex = DEFAULT_COLOR; warn.badColor += 1; }
+    customers.push({ id, name: r.Name, colorHex, defaultRate, isActive: toBool(r.IsActive), createdAt: r.CreatedAt });
   }
-  const customerIds = new Set(customers.map((c) => c.id));
 
+  // ---- projects ----
   const projects = [];
-  for (const r of parseCsv(texts[BACKUP_FILES.projects])) {
+  const projectIds = new Set();
+  rowNo = 0;
+  for (const r of readRows(texts[BACKUP_FILES.projects])) {
+    rowNo += 1;
     const id = Number(r.Id);
     const customerId = Number(r.CustomerId);
     const hourlyRate = toNumberOrNull(r.HourlyRate);
-    if (!Number.isInteger(id) || id <= 0 || !r.Name || !customerIds.has(customerId) || Number.isNaN(hourlyRate)) return bad(BACKUP_FILES.projects);
+    if (!Number.isInteger(id) || id <= 0 || !r.Name || !customerIds.has(customerId) || Number.isNaN(hourlyRate)) {
+      return fail('badData', BACKUP_FILES.projects, rowNo);
+    }
+    if (projectIds.has(id)) return fail('duplicateId', BACKUP_FILES.projects, rowNo);
+    projectIds.add(id);
+    let template = r.TicketUrlTemplate || null;
+    if (template && validateTicketTemplate(template)) { template = null; warn.badTemplate += 1; }
     projects.push({
       id, customerId, name: r.Name, hourlyRate,
-      ticketUrlTemplate: r.TicketUrlTemplate || null,
+      ticketUrlTemplate: template,
       isActive: toBool(r.IsActive), createdAt: r.CreatedAt
     });
   }
-  const projectIds = new Set(projects.map((p) => p.id));
 
+  // ---- entries ----
   const entries = [];
-  for (const r of parseCsv(texts[BACKUP_FILES.entries])) {
+  const entryIds = new Set();
+  rowNo = 0;
+  for (const r of readRows(texts[BACKUP_FILES.entries])) {
+    rowNo += 1;
     const id = Number(r.Id);
     const projectId = Number(r.ProjectId);
-    if (!Number.isInteger(id) || id <= 0 || !projectIds.has(projectId) || Number.isNaN(Date.parse(r.StartTime))) return bad(BACKUP_FILES.entries);
-    if (r.EndTime && Number.isNaN(Date.parse(r.EndTime))) return bad(BACKUP_FILES.entries);
+    if (!Number.isInteger(id) || id <= 0 || !projectIds.has(projectId)) return fail('badData', BACKUP_FILES.entries, rowNo);
+    const startTime = String(r.StartTime ?? '').trim();
+    const endTime = String(r.EndTime ?? '').trim();
+    if (!startTime) return fail('badData', BACKUP_FILES.entries, rowNo);
+    // Timestamps that are not ISO dates were most likely rewritten by a spreadsheet program.
+    if (!isIso(startTime) || (endTime && !isIso(endTime))) return fail('spreadsheetChanged', BACKUP_FILES.entries, rowNo);
+    if (entryIds.has(id)) return fail('duplicateId', BACKUP_FILES.entries, rowNo);
+    entryIds.add(id);
+    if (endTime && parseMs(endTime) <= parseMs(startTime)) return fail('endBeforeStart', BACKUP_FILES.entries, rowNo);
     entries.push({
-      id, projectId, startTime: r.StartTime, endTime: r.EndTime || '',
+      id, projectId, startTime, endTime,
       note: r.Note || '', ticket: r.Ticket || '',
-      createdAt: r.CreatedAt || r.StartTime, updatedAt: r.UpdatedAt || r.StartTime
+      createdAt: r.CreatedAt || startTime, updatedAt: r.UpdatedAt || startTime
     });
   }
 
-  return { ok: true, data: { customers, projects, entries }, meta };
+  // At most one entry may be open. Older ones are closed, never deleted.
+  const patches = repairOpenEntries(entries);
+  for (const patch of patches) {
+    const entry = entries.find((e) => e.id === patch.id);
+    if (entry) entry.endTime = patch.endTime;
+  }
+  warn.extraOpen = patches.length;
+
+  const warnings = Object.entries(warn).filter(([, count]) => count > 0).map(([code, count]) => ({ code, count }));
+  return { ok: true, data: { customers, projects, entries }, meta, warnings };
 }

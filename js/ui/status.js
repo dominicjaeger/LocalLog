@@ -74,6 +74,13 @@ function askFolderChoice() {
   });
 }
 
+/** A clear message for a backup that could not be loaded. */
+function loadErrorText(result) {
+  const params = { file: result.detail || '', row: result.row || '' };
+  if (result.error === 'badData' && result.row) return t('folder.error.badRow', params);
+  return t(`folder.error.${result.error}`, params);
+}
+
 export async function chooseFolderFlow() {
   let dir;
   try {
@@ -89,13 +96,15 @@ export async function chooseFolderFlow() {
       if (!confirm(t('folder.confirmLoad'))) return;
       const result = await loadFromFolder(dir);
       if (!result.ok) {
-        toast(t(`folder.error.${result.error}`, { file: result.detail || '' }), 'error');
+        toast(loadErrorText(result), 'error');
         return;
       }
       await attachFolder(dir);
       await refreshData();
       await afterDataReplaced();
-      toast(t('folder.loaded'), 'success');
+      toast(t(result.safetyCopy ? 'folder.loadedSafety' : 'folder.loaded'), 'success');
+      const notes = result.warnings.map((w) => t(`folder.warn.${w.code}`, { n: w.count }));
+      if (notes.length) setTimeout(() => toast(notes.join(' '), 'warning'), 4200);
     } else if (choice === 'replace') {
       if (!confirm(t('folder.confirmReplace'))) return;
       await attachFolder(dir);

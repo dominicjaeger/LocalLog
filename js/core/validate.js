@@ -11,6 +11,12 @@ export function validateTimes(startIso, endIso) {
   return null;
 }
 
+/** A running entry's start may not be later than now. */
+export function validateStartNotFuture(startMs, nowMs = Date.now()) {
+  if (!Number.isFinite(startMs)) return 'invalidTime';
+  return startMs > nowMs ? 'startInFuture' : null;
+}
+
 export function validateName(name) {
   const n = String(name ?? '').trim();
   if (!n) return 'nameRequired';
