@@ -1,5 +1,5 @@
 // Pure export / reporting logic: rows for the table, range filters, clipboard text, CSV text,
-// and the weekly summary. No DOM access.
+// and file names. No DOM access.
 
 import { entryDurationSeconds, secondsToHours, formatClock, inRange, rangeFor } from './time.js';
 import { formatHours, formatMoney, formatDate, formatTime, decimalSeparator } from './format.js';
@@ -98,53 +98,6 @@ export function exportFileName(kind, now = new Date()) {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `locallog-${y}-${m}-${d}-${kind}.csv`;
-}
-
-/**
- * Hours per customer and project in a range (running entries count up to `now`).
- * Returns { seconds, value, customers: [{ customer, seconds, value, projects: [{ project, seconds, value }] }] }.
- */
-export function summarizeByCustomer({ entries, projects, customers, range, now = new Date() }) {
-  const projectsById = indexById(projects);
-  const customersById = indexById(customers);
-  const byCustomer = new Map();
-  let total = 0;
-  let totalValue = 0;
-  let anyValue = false;
-
-  for (const entry of entries) {
-    if (!inRange(entry, range)) continue;
-    const r = resolveEntry(entry, projectsById, customersById, now);
-    if (!r.project || !r.customer) continue;
-    total += r.seconds;
-    // Value is based on exact seconds so that group sums stay consistent.
-    const exactValue = r.rate === null ? null : (r.seconds / 3600) * r.rate;
-    if (exactValue !== null) { totalValue += exactValue; anyValue = true; }
-
-    let c = byCustomer.get(r.customer.id);
-    if (!c) { c = { customer: r.customer, seconds: 0, value: null, projects: new Map() }; byCustomer.set(r.customer.id, c); }
-    c.seconds += r.seconds;
-    if (exactValue !== null) c.value = (c.value || 0) + exactValue;
-
-    let p = c.projects.get(r.project.id);
-    if (!p) { p = { project: r.project, seconds: 0, value: null }; c.projects.set(r.project.id, p); }
-    p.seconds += r.seconds;
-    if (exactValue !== null) p.value = (p.value || 0) + exactValue;
-  }
-
-  const round = (v) => (v === null ? null : Math.round(v * 100) / 100);
-  const list = [...byCustomer.values()]
-    .map((c) => ({
-      customer: c.customer,
-      seconds: c.seconds,
-      value: round(c.value),
-      projects: [...c.projects.values()]
-        .map((p) => ({ project: p.project, seconds: p.seconds, value: round(p.value) }))
-        .sort((a, b) => b.seconds - a.seconds)
-    }))
-    .sort((a, b) => b.seconds - a.seconds);
-
-  return { seconds: total, value: anyValue ? round(totalValue) : null, customers: list };
 }
 
 export { rangeFor };

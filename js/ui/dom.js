@@ -79,14 +79,29 @@ export function setIcon(button, name, text = '') {
 
 let toastTimer = null;
 
-export function toast(message, kind = 'info') {
+const TOAST_ACTION_MS = 8000;
+
+/**
+ * Shows a short message. With `action` ({ label, onClick }) the toast holds a button (reachable by
+ * keyboard) and stays for 8 seconds so there is time to use it.
+ */
+export function toast(message, kind = 'info', action = null) {
   const box = document.getElementById('toast');
   if (!box) return;
-  box.textContent = message;
+  box.replaceChildren(document.createTextNode(message));
   box.className = `toast toast-${kind}`;
   box.hidden = false;
+  if (action) {
+    const button = h('button', { type: 'button', class: 'toast-action' }, action.label);
+    button.addEventListener('click', () => {
+      box.hidden = true;
+      if (toastTimer) clearTimeout(toastTimer);
+      action.onClick();
+    });
+    box.append(button);
+  }
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { box.hidden = true; }, kind === 'error' ? 6000 : 4000);
+  toastTimer = setTimeout(() => { box.hidden = true; }, action ? TOAST_ACTION_MS : (kind === 'error' ? 6000 : 4000));
 }
 
 /** Message for a validation error code. */

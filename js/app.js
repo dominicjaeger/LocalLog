@@ -2,7 +2,7 @@
 
 import { APP_VERSION } from './version.js';
 import { t, detectLanguage, setLanguage, getLanguage } from './i18n.js';
-import { initStorage, getSetting, setSetting, onRemoteChange } from './storage.js';
+import { initStorage, getSetting, setSetting, onRemoteChange, updateEntry, updateEntryIfOpen } from './storage.js';
 import { state, loadSettings, saveSetting, refreshData, watchDatabase, onData } from './state.js';
 import { initBackup, requestPersistence } from './backup.js';
 import { TimerEngine, RECOVER_AFTER_MS } from './timer.js';
@@ -19,6 +19,7 @@ import { fillProjectSelect } from './ui/picker.js';
 import { renderEntries, initEntries, tickEntries } from './ui/entries.js';
 import { renderCatalog, initCatalog } from './ui/catalog.js';
 import { renderWeekly, initWeekly } from './ui/weekly.js';
+import { renderDay, initDay, tickDay, goToDay } from './ui/day.js';
 import { renderStatus, initStatus, maybeShowWelcome } from './ui/status.js';
 import { copyTable } from './ui/export.js';
 
@@ -70,9 +71,10 @@ async function init() {
   // A handle for testing in the browser console (for example to simulate a gap in the heartbeat).
   window.localLog = { timer };
 
-  initEntries({ getPreferredProjectId: () => $('cmbProjects').value, adjustStart });
+  const entriesApi = initEntries({ getPreferredProjectId: () => $('cmbProjects').value, adjustStart });
   initCatalog();
-  initWeekly();
+  initDay({ openAddDialog: entriesApi.openAddDialog });
+  initWeekly({ openDay: (date) => { goToDay(date); showTab('tab-btn-day'); } });
   initStatus({ onDataReplaced: reloadTimer });
   setupHeader();
   setupTimerControls();
@@ -123,6 +125,7 @@ async function handleRemoteChange(message) {
 function renderAll() {
   renderPicker();
   renderEntries();
+  renderDay();
   renderWeekly();
   renderCatalog();
   renderStatus();
@@ -458,6 +461,7 @@ function setupTimerControls() {
   timer.on('tick', (s) => {
     $('txtStopwatch').textContent = formatClock(s.elapsedSeconds || 0);
     tickEntries();
+    tickDay();
     checkLongRunning(s);
   });
   timer.on('stateChange', (s) => {
@@ -493,8 +497,18 @@ function setupTimerControls() {
     if (s.isRunning && s.project && s.project.id !== projectId) {
       if (timer.canCorrectProject()) {
         // Within the first minutes this is a correction of the entry, not a new entry.
+        const previousId = s.project.id;
+        const entryId = s.entry.id;
         timer.updateActive({ projectId })
-          .then((saved) => { if (saved) toast(t('timer.projectCorrected'), 'success'); })
+          .then((saved) => {
+            if (!saved) return;
+            const now = timer.getState();
+            const label = now.project && now.customer ? `${now.customer.name} › ${now.project.name}` : '';
+            toast(t('timer.projectCorrectedTo', { project: label }), 'success', {
+              label: t('timer.undo'),
+              onClick: () => undoProjectCorrection(entryId, previousId)
+            });
+          })
           .catch(console.error);
         return;
       }
@@ -555,6 +569,22 @@ function setupTimerControls() {
   });
 }
 
+/** Undo of the 2-minute project correction: writes the previous project back (also when the entry was stopped). */
+async function undoProjectCorrection(entryId, previousProjectId) {
+  try {
+    const saved = await updateEntryIfOpen(entryId, { projectId: previousProjectId });
+    // The entry was stopped in the meantime: the correction concerned this same entry, so write it anyway.
+    if (!saved) await updateEntry(entryId, { projectId: previousProjectId });
+    await saveSetting('lastProjectId', previousProjectId);
+    await timer.sync();
+    const picker = $('cmbProjects');
+    if (picker.querySelector(`option[value="${previousProjectId}"]`)) picker.value = String(previousProjectId);
+  } catch (err) {
+    console.error(err);
+    toast(errorText('saveFailed'), 'error');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -582,6 +612,9 @@ function setupSettings() {
 // Tabs
 // ---------------------------------------------------------------------------
 
+let showTabById = () => {};
+const showTab = (id) => showTabById(id);
+
 function setupTabs() {
   const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
   const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
@@ -597,6 +630,11 @@ function setupTabs() {
     for (const panel of panels) panel.classList.toggle('active', panel.id === target);
     if (focus) tab.focus();
   }
+
+  showTabById = (id) => {
+    const tab = tabs.find((x) => x.id === id);
+    if (tab) activate(tab, false);
+  };
 
   tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => activate(tab, false));

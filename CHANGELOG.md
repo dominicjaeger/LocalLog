@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 – 2026-11-24
+
+### Day and Week evaluations (for transferring hours)
+- New **Day** tab: hours per project for one day, labelled "Customer › Project", rounded to 15 minutes with the exact time next to it. Each project has a copy button and a "transferred" tick. The mark stores the rounded hours and shows "changed since transfer (was …)" when the value changes later. Running timers count up to now; their tick box waits until the timer stops. Day export (copy or CSV, `locallog-YYYY-MM-DD-day.csv`). "Add entry" opens with the selected day.
+- New **Week** tab: a timesheet grid (projects x Monday to Sunday) with row, day and week totals, transfer marks in the cells, and a click on a cell or day heading opens that day. Export of the grid. With rates on, a value column per row and a value total (no value per day cell).
+- The old "Weekly overview" in the Entries tab (customer → project bars) is removed.
+- Both evaluations round each day and project to the 15-minute grid (setting `roundingMode`, default nearest). The entry list and the entry export stay exact.
+- Entries across midnight are split at local midnight in the evaluations only (daylight-saving days are handled). The stored entry and the entry list are unchanged.
+
+### Adjacent entries
+- Two entries are adjacent when one ends within 60 seconds of the other's start. Editing that boundary asks "Move both / Only this entry / Cancel". "Move both" saves both entries in one transaction (`updateEntries`); if that would leave the neighbour without time, only "Only this entry" and "Cancel" are offered. A running entry can be the next entry.
+- The Day view shows entries oldest first, one row for a shared boundary, a gap row with "Extend previous" / "Extend next", and an overlap row with "Shorten previous" / "Shorten next".
+
+### Project correction hint
+- After the 2-minute project correction, a message "Project corrected: Customer › Project" with an **Undo** button stays for 8 seconds. Toasts can now carry an action button.
+
+### Data and backup
+- Data layout version 2: new IndexedDB store `transfers`. The upgrade now runs by `oldVersion`, so an existing version-1 database is upgraded without errors and keeps its data.
+- Backup: new file `transfers.csv` (Key, Date, ProjectId, Hours, Seconds, TransferredAt). Version-1 backups (no `transfers.csv`) still load; marks for unknown projects are skipped with a note; duplicate keys are rejected. Deleting a project or customer also deletes its transfer marks.
+
+### Internal
+- New modules `js/core/report.js`, `js/core/adjacent.js`, `js/ui/day.js`, `js/ui/entry-editor.js` (inline editing shared by the Entries table and the Day view) and `js/ui/boundary-dialog.js`. `summarizeByCustomer` was removed.
+
 ## 0.2.0 – 2026-11-22
 
 ### Timer and data safety

@@ -180,6 +180,8 @@
     <main id="mainContent" class="tabs-container">
       <nav class="tab-nav" role="tablist" data-i18n-aria-label="tabs.label" aria-label="Main navigation">
         <button id="tab-btn-entries" type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="tabEntries" tabindex="0" data-i18n="tabs.entries">Entries</button>
+        <button id="tab-btn-day" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabDay" tabindex="-1" data-i18n="tabs.day">Day</button>
+        <button id="tab-btn-week" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabWeek" tabindex="-1" data-i18n="tabs.week">Week</button>
         <button id="tab-btn-catalog" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabCatalog" tabindex="-1" data-i18n="tabs.catalog">Customers &amp; Projects</button>
         <button id="tab-btn-settings" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabSettings" tabindex="-1" data-i18n="tabs.settings">Settings</button>
         <button id="tab-btn-about" type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="tabAbout" tabindex="-1" data-i18n="tabs.about">About</button>
@@ -231,26 +233,58 @@
           <span id="txtMoreInfo"></span>
           <button id="btnShowMore" type="button" class="btn btn-outline btn-sm" data-i18n="entries.showMore">Show more</button>
         </div>
-        <p class="hint-line" data-i18n="entries.editHint">Click a cell to edit it. Enter saves, Esc cancels.</p>
+        <p class="hint-line" data-i18n="entries.editHint">Click a cell to edit it. Enter saves, Esc cancels. If an entry touches the next or previous one, LocalLog asks whether to move that one too.</p>
 
-        <div class="card-section week-card">
+      </section>
+
+      <!-- Day -->
+      <section id="tabDay" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-day">
+        <div class="table-toolbar">
+          <div class="toolbar-group">
+            <button id="dayPrev" type="button" class="btn btn-outline btn-sm" data-i18n="day.prev">Previous day</button>
+            <button id="dayToday" type="button" class="btn btn-outline btn-sm" data-i18n="day.today">Today</button>
+            <button id="dayNext" type="button" class="btn btn-outline btn-sm" data-i18n="day.next">Next day</button>
+            <input id="dayDate" type="date" class="form-input form-input-sm" data-i18n-aria-label="day.dateLabel" aria-label="Date" required>
+          </div>
+          <div id="dayExportSlot"></div>
+        </div>
+        <h3 id="dayLabel" class="day-label"></h3>
+
+        <div class="card-section">
+          <h3 class="card-title" data-i18n="day.perProject">Per project</h3>
+          <p class="card-desc" data-i18n="day.perProjectDesc">Hours per project, rounded to 15 minutes. Copy the value into your other system and tick it off.</p>
+          <div id="dayProjects" class="day-list"></div>
+          <div id="dayTotals" class="day-totals" hidden></div>
+        </div>
+
+        <div class="card-section">
           <div class="week-head">
-            <h3 class="card-title" data-i18n="week.title">Weekly overview</h3>
-            <div class="toolbar-group">
-              <button id="weekPrev" type="button" class="btn btn-outline btn-sm" data-i18n="week.prev">Previous</button>
-              <button id="weekThis" type="button" class="btn btn-outline btn-sm" data-i18n="week.this">This week</button>
-              <button id="weekNext" type="button" class="btn btn-outline btn-sm" data-i18n="week.next">Next</button>
-              <span id="weekExportSlot"></span>
-            </div>
+            <h3 class="card-title" data-i18n="day.entries">Entries</h3>
+            <button id="btnDayAddEntry" type="button" class="btn btn-primary btn-sm" data-i18n="entries.add">Add entry</button>
           </div>
-          <div class="week-summary">
-            <span id="weekLabel" class="week-label"></span>
-            <strong id="weekTotal"></strong>
-          </div>
-          <div id="weekBody" class="week-body"></div>
+          <div id="dayEntries" class="day-entries"></div>
+          <p class="hint-line" data-i18n="entries.editHint">Click a cell to edit it. Enter saves, Esc cancels. If an entry touches the next or previous one, LocalLog asks whether to move that one too.</p>
         </div>
       </section>
 
+      <!-- Week -->
+      <section id="tabWeek" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-week">
+        <div class="table-toolbar">
+          <div class="toolbar-group">
+            <button id="weekPrev" type="button" class="btn btn-outline btn-sm" data-i18n="week.prev">Previous</button>
+            <button id="weekThis" type="button" class="btn btn-outline btn-sm" data-i18n="week.this">This week</button>
+            <button id="weekNext" type="button" class="btn btn-outline btn-sm" data-i18n="week.next">Next</button>
+          </div>
+          <div id="weekExportSlot"></div>
+        </div>
+        <div class="week-summary">
+          <span id="weekLabel" class="week-label"></span>
+          <strong id="weekTotal"></strong>
+        </div>
+        <div id="weekGridWrap"></div>
+        <p id="weekExact" class="hint-line"></p>
+        <p class="hint-line" data-i18n="week.hint">Hours are rounded to 15 minutes for each day and project. Click a day or a value to open that day.</p>
+      </section>
       <!-- Customers & Projects -->
       <section id="tabCatalog" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-catalog">
         <div class="catalog-head">
@@ -308,7 +342,7 @@
       <section id="tabAbout" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-about">
         <div class="card-section">
           <h3 class="card-title" data-i18n="about.title">About LocalLog</h3>
-          <p class="card-desc" data-i18n="about.intro">LocalLog is a simple time tracker for your projects. Track time for customers and projects, correct entries right in the table and export them for Excel.</p>
+          <p class="card-desc" data-i18n="about.intro">LocalLog is a simple time tracker for your projects. Track time for customers and projects, correct entries right in the table and export them for Excel. The Day and Week tabs show your hours per project, rounded to 15 minutes, for transferring them into another system.</p>
           <ul class="plain-list">
             <li data-i18n="about.local">Your entries stay in this browser on this computer. They are never sent anywhere.</li>
             <li data-i18n="about.limits">Other browsers and other computers do not see your entries. Clearing your browser data deletes them, so set up a backup folder or export regularly.</li>
@@ -320,12 +354,13 @@
         <details class="card-section tech-details">
           <summary data-i18n="about.techTitle">Technical details</summary>
           <ul class="plain-list">
-            <li data-i18n="about.tech.storage">Storage: entries, customers and projects are kept in the browser's IndexedDB database "locallog".</li>
-            <li data-i18n="about.tech.backup">Backup: an optional folder (File System Access API) receives customers.csv, projects.csv, entries.csv and meta.csv. The files use UTF-8, a comma separator, ISO timestamps and decimal points.</li>
+            <li data-i18n="about.tech.storage">Storage: entries, customers, projects and transfer marks are kept in the browser's IndexedDB database "locallog" (data layout version 2).</li>
+            <li data-i18n="about.tech.backup">Backup: an optional folder (File System Access API) receives customers.csv, projects.csv, entries.csv, transfers.csv and meta.csv. The files use UTF-8, a comma separator, ISO timestamps and decimal points.</li>
             <li data-i18n="about.tech.network">Network: a Content Security Policy with connect-src 'none' blocks the app from sending data anywhere. The app has no external dependencies and no telemetry.</li>
             <li data-i18n="about.tech.offline">Offline use: a service worker caches the app files. A new version is picked up automatically after an update.</li>
             <li data-i18n="about.tech.sync">Several tabs: LocalLog tabs open in the same browser stay in sync through a BroadcastChannel; the database is always the single source for the running timer.</li>
             <li data-i18n="about.tech.snap">Quarter hours: snapping the timer to a 15-minute grid is optional and off by default. Times you enter or correct yourself are never snapped.</li>
+            <li data-i18n="about.tech.evaluations">Day and Week: hours are summed per project and day and rounded to the 15-minute grid (nearest); the week adds up the rounded days. Entries across midnight are split at local midnight for these evaluations only; the stored entries, the entry list and the entry export stay exact. Transfer marks store the rounded hours at the moment of ticking.</li>
             <li data-i18n="about.tech.formats">Formats: numbers, dates and times follow your browser's regional settings. The interface language can be switched in the header.</li>
             <li><span data-i18n="about.tech.version">Version:</span> <span id="techVersion"></span></li>
           </ul>
@@ -378,6 +413,23 @@
       </form>
     </dialog>
 
+    <!-- Move the neighbouring entry too? -->
+    <dialog id="dlgBoundary" class="modal-dialog" aria-labelledby="dlgBoundaryTitle">
+      <form method="dialog">
+        <div class="modal-header">
+          <h3 id="dlgBoundaryTitle" class="modal-title" data-i18n="boundary.title">Adjacent entry</h3>
+        </div>
+        <div class="modal-body">
+          <p id="txtBoundary"></p>
+          <p id="txtBoundaryError" class="field-hint is-error" role="alert" hidden></p>
+        </div>
+        <div class="modal-footer modal-footer-stack">
+          <button type="submit" value="both" id="btnBoundaryBoth" class="btn btn-primary" data-i18n="boundary.both">Move both</button>
+          <button type="submit" value="only" id="btnBoundaryOnly" class="btn btn-secondary" data-i18n="boundary.only">Only this entry</button>
+          <button type="submit" value="cancel" id="btnBoundaryCancel" class="btn btn-ghost" data-i18n="dialog.cancel">Cancel</button>
+        </div>
+      </form>
+    </dialog>
     <!-- Customer -->
     <dialog id="dlgCustomer" class="modal-dialog" aria-labelledby="dlgCustomerTitle">
       <form id="formCustomer" method="dialog">

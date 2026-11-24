@@ -11,6 +11,18 @@
 6. **No visible technical jargon and no emoji** in the interface; technical details live in the collapsed section under About.
 7. **Version:** `js/version.js` and `sw.js` are bumped together; `node tools/check.mjs` verifies it (see README).
 
+## Status (0.3.0)
+Round 3 of the implementation handoff is implemented (see [CHANGELOG.md](CHANGELOG.md)): data layout version 2 with transfer marks (`transfers` store, `transfers.csv`), linked boundaries for adjacent entries with the "Move both / Only this entry / Cancel" dialog, the Day tab (hours per project rounded to 15 minutes, copy, "transferred" tick, gap/overlap rows, day export), the Week timesheet grid with export, and the project correction hint with Undo.
+
+Verified on 2026-11-24 (in the in-app browser and with Node):
+- Pure modules in Node (Europe/Berlin): rounding per day and project (2:17 → 2,25; 0:52 → 0,75; 0:05 → 0,00), midnight split including a 25-hour daylight-saving day, week grid sums, boundary planning (both directions, collapse, running neighbour), gap actions, backup round trip with `transfers.csv`, a version-1 backup, skipped and duplicate transfer rows.
+- Upgrade of a real version-1 IndexedDB database with data to version 2 without errors; data unchanged.
+- Day tab: per-project rows, entry across midnight on both days, boundary dialog ("Move both" by Enter, collapse case with only "Only this entry" / "Cancel", Cancel keeps the value), "Extend previous", "changed since transfer" note after an edit, week grid with the transfer marker, project correction Undo, German interface, no horizontal page scrolling at 375 px (only the week grid scrolls inside its container), no console errors. EN and DE have the same keys.
+
+Not yet verified (needs more manual time):
+- Two real tabs side by side (the new writes use the same broadcast as before), the clipboard content of the copy button in an English browser, the exported CSV in Excel, dark mode of the new screens, a running entry as the neighbour in a real session, "Add entry" from the Day view with a past date.
+- Everything under "Not yet verified" of 0.2.0 below still applies (folder picker, mini window, notifications, install prompt, update banner, GitHub Pages).
+
 ## Status (0.2.0)
 Round 2 of the implementation handoff is implemented (see [CHANGELOG.md](CHANGELOG.md)): the database is the single source for the timer, open tabs stay in sync, the running entry's start can be corrected, the optional quarter-hour snapping, away and long-running prompts, a phone layout, stricter backup loading, paging for long lists, `tools/check.mjs` and `tools/serve.mjs`. Round 1 (0.1.0) covers the foundation, customers/projects, tickets, EN/DE, inline editing, export, weekly overview and backups.
 

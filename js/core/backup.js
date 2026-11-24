@@ -1,4 +1,4 @@
-// Pure backup file format (customers.csv, projects.csv, entries.csv, meta.csv).
+// Pure backup file format (customers.csv, projects.csv, entries.csv, transfers.csv, meta.csv).
 // Written locale-neutral: UTF-8, ',' separator, ISO timestamps, '.' decimals. Reading is more
 // forgiving so that files that were opened and saved in Excel (';' separator, BOM) still load.
 // No DOM access.
@@ -11,12 +11,16 @@ export const BACKUP_FILES = {
   customers: 'customers.csv',
   projects: 'projects.csv',
   entries: 'entries.csv',
+  transfers: 'transfers.csv',
   meta: 'meta.csv'
 };
 
 const CUSTOMER_HEADERS = ['Id', 'Name', 'ColorHex', 'DefaultRate', 'IsActive', 'CreatedAt'];
 const PROJECT_HEADERS = ['Id', 'CustomerId', 'Name', 'HourlyRate', 'TicketUrlTemplate', 'IsActive', 'CreatedAt'];
 const ENTRY_HEADERS = ['Id', 'ProjectId', 'StartTime', 'EndTime', 'Note', 'Ticket', 'CreatedAt', 'UpdatedAt'];
+
+const TRANSFER_HEADERS = ['Key', 'Date', 'ProjectId', 'Hours', 'Seconds', 'TransferredAt'];
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
 const DEFAULT_COLOR = '#0078D4';
 // A full ISO timestamp with a time zone, as LocalLog writes it. Excel turns these into local dates.
@@ -26,7 +30,7 @@ const num = (v) => (v === null || v === undefined ? '' : String(v));
 const flag = (v) => (v ? '1' : '0');
 
 /** Returns { 'customers.csv': text, ... } for the given data. */
-export function toBackupFiles({ customers, projects, entries, appVersion, schemaVersion }) {
+export function toBackupFiles({ customers, projects, entries, transfers = [], appVersion, schemaVersion }) {
   return {
     [BACKUP_FILES.customers]: serializeCsv(CUSTOMER_HEADERS, customers.map((c) => [
       c.id, c.name, c.colorHex, num(c.defaultRate), flag(c.isActive), c.createdAt
@@ -36,6 +40,9 @@ export function toBackupFiles({ customers, projects, entries, appVersion, schema
     ])),
     [BACKUP_FILES.entries]: serializeCsv(ENTRY_HEADERS, entries.map((e) => [
       e.id, e.projectId, e.startTime, e.endTime || '', e.note || '', e.ticket || '', e.createdAt, e.updatedAt
+    ])),
+    [BACKUP_FILES.transfers]: serializeCsv(TRANSFER_HEADERS, transfers.map((x) => [
+      x.key, x.date, x.projectId, x.hours, x.seconds, x.transferredAt
     ])),
     [BACKUP_FILES.meta]: serializeCsv(['Key', 'Value'], [
       ['AppVersion', appVersion],
@@ -68,7 +75,8 @@ const isIso = (v) => ISO_TIMESTAMP.test(String(v ?? '').trim()) && parseMs(Strin
  * Returns { ok: true, data: { customers, projects, entries }, meta, warnings } or
  * { ok: false, error, detail?, row? }. `detail` is the file name and `row` the data row (1 = first row
  * under the header). `warnings` is a list of { code, count } for things that were repaired:
- * 'badColor', 'badTemplate', 'extraOpen'.
+ * 'badColor', 'badTemplate', 'extraOpen', 'skippedTransfers'. A backup of data layout version 1 has no
+ * transfers.csv; it loads without transfer marks.
  */
 export function fromBackupFiles(texts, supportedSchemaVersion) {
   for (const key of ['customers', 'projects', 'entries']) {
@@ -84,7 +92,7 @@ export function fromBackupFiles(texts, supportedSchemaVersion) {
   }
 
   const fail = (error, detail, row) => ({ ok: false, error, detail, row });
-  const warn = { badColor: 0, badTemplate: 0, extraOpen: 0 };
+  const warn = { badColor: 0, badTemplate: 0, extraOpen: 0, skippedTransfers: 0 };
 
   // ---- customers ----
   const customers = [];
@@ -149,6 +157,32 @@ export function fromBackupFiles(texts, supportedSchemaVersion) {
     });
   }
 
+  // ---- transfers (optional file; absent in version-1 backups) ----
+  const transfers = [];
+  const transferKeys = new Set();
+  if (typeof texts[BACKUP_FILES.transfers] === 'string') {
+    rowNo = 0;
+    for (const r of readRows(texts[BACKUP_FILES.transfers])) {
+      rowNo += 1;
+      const projectId = Number(r.ProjectId);
+      const hours = toNumberOrNull(r.Hours);
+      const seconds = toNumberOrNull(r.Seconds);
+      const date = String(r.Date ?? '').trim();
+      const transferredAt = String(r.TransferredAt ?? '').trim();
+      const key = `${date}|${projectId}`;
+      if (!DATE_KEY.test(date) || !Number.isInteger(projectId) || projectId <= 0
+          || hours === null || Number.isNaN(hours) || seconds === null || Number.isNaN(seconds)
+          || String(r.Key ?? '').trim() !== key) {
+        return fail('badData', BACKUP_FILES.transfers, rowNo);
+      }
+      if (transferKeys.has(key)) return fail('duplicateId', BACKUP_FILES.transfers, rowNo);
+      transferKeys.add(key);
+      // A mark for a project that is not in the backup cannot be shown anywhere: skip it and tell the user.
+      if (!projectIds.has(projectId)) { warn.skippedTransfers += 1; continue; }
+      transfers.push({ key, date, projectId, hours, seconds, transferredAt });
+    }
+  }
+
   // At most one entry may be open. Older ones are closed, never deleted.
   const patches = repairOpenEntries(entries);
   for (const patch of patches) {
@@ -158,5 +192,5 @@ export function fromBackupFiles(texts, supportedSchemaVersion) {
   warn.extraOpen = patches.length;
 
   const warnings = Object.entries(warn).filter(([, count]) => count > 0).map(([code, count]) => ({ code, count }));
-  return { ok: true, data: { customers, projects, entries }, meta, warnings };
+  return { ok: true, data: { customers, projects, entries, transfers }, meta, warnings };
 }

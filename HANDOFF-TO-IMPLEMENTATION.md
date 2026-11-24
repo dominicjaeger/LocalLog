@@ -1,247 +1,245 @@
-# LocalLog – Implementation Handoff (Round 2 → version 0.2.0)
+# LocalLog – Implementation Handoff (Round 3 → version 0.3.0)
 
-Status: implemented in version 0.2.0 (2026-11-22); see [CHANGELOG.md](CHANGELOG.md) and the status in [HANDOFF.md](HANDOFF.md).
-Open topics that still need a decision are tracked in [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md). **Don't implement anything listed there as open**; build only what this document describes.
+Status: implemented in version 0.3.0 (2026-11-24).
+Open topics are tracked in [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md). **Don't implement anything listed there as open**; build only what this document describes. Items marked "default assumed" there are part of this plan unless the owner objects.
 
----
+Earlier rounds are done:
+- 0.1.0: foundation, customers/projects, EN/DE, export, backup.
+- 0.2.0: data safety, tab sync, running-entry editing, snapping, phone layout.
 
-## 0. Context
-
-**Round 1 (version 0.1.0) is implemented.** It covers:
-- the PWA foundation and the Content Security Policy (`connect-src 'none'`);
-- pure logic modules in `js/core/`;
-- customers → projects, tickets;
-- English/German interface;
-- inline table editing, export, weekly overview;
-- the "Your data" card, backup folder and reminders.
-
-The binding architecture rules are in [HANDOFF.md](HANDOFF.md) (PWA only, all data local, no inline styles or scripts, formats follow the browser locale, every text in English and German, logic in pure modules, no emoji or jargon in the interface).
-
-**Round 2 basis:** a code review and test session on 2026-11-22:
-- 24 logic checks with Node;
-- in-browser tests: timer, reload, two tabs, 4,700 entries, phone width, dark mode, security policy and offline mode.
-
-Section 2 lists the bugs it found.
+Details are in [CHANGELOG.md](CHANGELOG.md). The architecture rules are in [HANDOFF.md](HANDOFF.md).
 
 ---
 
-## 1. Decisions for round 2 (binding)
+## 1. Goals of round 3
+
+The owner asked for four things:
+
+| # | Request | Result |
+|---|---|---|
+| 1 | Add entries without starting the timer | **Already possible** via "Add entry" (dialog). The owner confirmed the dialog is fine. Only change: it opens with the date of the selected day when used from the new Day view (WP3). |
+| 2 | Edit times of adjacent entries more easily | **Linked boundaries** (WP2): when two entries touch and one boundary is edited, LocalLog asks each time whether to move the neighbour too. The Day view shows these boundaries and gaps explicitly. |
+| 3 | A day evaluation for transferring each day into another system | **New "Day" tab** (WP3): hours per project for one day, rounded to 15 minutes, with a copy button and a "transferred" tick per project. |
+| 4 | Group by project in the day and week evaluation | Both evaluations list **projects** (labelled "Customer › Project"), with no customer level. The week becomes a **timesheet grid** (WP4): projects × Monday–Sunday. |
+
+---
+
+## 2. Decisions
+
+### New in round 3 (binding)
 
 | # | Decision |
 |---|---|
-| R1 | The next version is **0.2.0**. Bump `js/version.js` and `sw.js` together. |
-| R2 | **Remove `server.ps1`.** There is no PowerShell in the repository. |
-| R3 | **The layout must work on phones** (375 px wide) without horizontal page scrolling. |
-| R4 | **A running entry's start time can be moved back** with quick buttons **−5 min** and **−15 min**, by clicking the start time next to the stopwatch, and in the table's start cell. |
-| R5 | **Overlap with the previous entry only gives a warning.** Nothing is changed automatically. |
-| R6 | **Changing the project within the first 2 minutes of a running entry corrects that entry** (it changes its project) instead of starting a new one. After 2 minutes it switches as today. The rule is to be reviewed later (see OPEN-QUESTIONS). |
-| R7 | **The rounding grid is always 15 minutes.** |
-| R8 | **The rounding direction is "nearest" for now**, but the code must support "up" and "down" through a setting, so it can become user-selectable later without a rewrite. |
-| R9 | **There is no minimum duration.** |
-| R10 | **Snapping start and stop times to the 15-minute grid is an opt-in setting**, off by default. |
-| R11 | **All open tabs stay in sync.** |
-| R12 | **Resuming within 1 minute of a pause continues the previous entry** instead of creating a new one. |
-| R13 | **The "timer was running" prompt after a reload only appears when the last sign of activity is more than 5 minutes old.** Otherwise the timer simply continues. |
-| R14 | **No browser permission prompts for away detection** (no `IdleDetector` for now). Away time is detected from gaps in the app's own heartbeat. |
-| R15 | **Long-running warning:** when a timer runs longer than 10 hours or across midnight. |
+| D3-1 | The next version is **0.3.0**. The data layout version (`SCHEMA_VERSION`) becomes **2** (new store for transfer marks). |
+| D3-2 | **Day and week evaluations group by project.** Each row is one project, labelled "Customer › Project", sorted by customer name, then project name. There are no customer subtotals. |
+| D3-3 | **The week evaluation is a timesheet grid:** rows = projects, columns = Monday–Sunday, plus row and column totals. |
+| D3-4 | **Evaluation rounding:** for each day and project, the exact total is rounded to the 15-minute grid using the existing setting `roundingMode` (default "nearest"). This decides Q-R1 = b) **for the evaluations**. Week cells use the same rounded day values; row and week totals are sums of rounded cells, so the week always matches what was transferred day by day. |
+| D3-5 | **The evaluations show the rounded decimal hours prominently and the exact time next to them** (e.g. "2,25 h · exact 2:17"). Formats follow the browser locale. |
+| D3-6 | **A day and project can be marked "transferred".** The mark stores the rounded hours at that moment. If the value changes later, the mark shows "changed since transfer (was 2,25)". |
+| D3-7 | **The "Add entry" dialog stays as it is** (request 1). |
+| D3-8 | **Linked boundaries, asking each time:** two entries are adjacent when one ends within 60 seconds of the other's start. When the user edits that boundary on one entry, LocalLog **asks each time** whether to move the neighbour too: "Move both", "Only this entry" or "Cancel". "Move both" saves both entries in one atomic save. (Decided 2026-11-24, Q-D1.) |
+| D3-9 | **Entries across midnight are split at local midnight for the Day and Week evaluations.** An entry 23:00–01:00 counts 1 h on each day. The stored entry is **not** changed; only the evaluations split it. The Entries tab list and the entry-level export keep showing it once, on its start day. (Q-D7.) |
+| D3-10 | **No combined notes/tickets** in the day transfer; it covers hours only. (Q-D3.) |
+| D3-11 | **Transferred days are not locked**; entries stay editable. A later change only shows the "changed since transfer" note (D3-6). (Q-D6.) |
+| D3-12 | **The week grid shows no value per day cell**; with rates on, only a value column per row and a value total. (Q-D8.) |
+| D3-13 | **Project correction hint:** the 2-minute project correction (round 2) stays at 2 minutes and now shows a visible hint "Project corrected" with an **Undo** button. (Q-T-1.) |
 
-**Still open (don't build):**
-- what exactly gets rounded and shown (per entry or per day and project);
-- the export columns for rounded hours.
+### From earlier rounds (still binding, summary)
 
-See OPEN-QUESTIONS.
-
----
-
-## 2. Bugs found on 2026-11-22 (to fix in this round)
-
-| # | Severity | Bug | Where |
-|---|---|---|---|
-| B1 | High | **Two open tabs overwrite each other.** I stopped the timer in tab 1; tab 2 still showed it running. Pausing in tab 2 changed the stopped entry's end time and created a new running entry. | `js/timer.js` (cached `this.running`); no cross-tab notification |
-| B2 | High | **Editing the running entry in the table isn't seen by the timer.** The timer bar keeps the old note and ticket, and after pause → resume the next segment gets the old values back. | `js/timer.js` keeps its own copy; `js/ui/entries.js` writes to the database directly |
-| B3 | Medium | **"Load from folder" doesn't validate enough.** Duplicate IDs pass (rows silently disappear), invalid colours and `end ≤ start` pass. With more than one running entry, `timer.load()` **deletes** the older ones. | `js/core/backup.js`, `js/timer.js:44` |
-| B4 | Medium | **The recovery prompt appears on every reload.** | `js/app.js` `reloadTimer()` |
-| B5 | Medium | **Quick pause → resume creates entries of a few seconds.** | `js/timer.js` |
-| B6 | Medium | **A new app version reloads the page immediately**, even during editing, so unsaved input is lost. | `js/app.js:389` |
-| B7 | Medium | **A backup file opened and saved in Excel** (`;` separator) can't be loaded, and the error is unclear. | `js/core/backup.js` |
-| B8 | Low | **Export hours are rounded per row to 0.01 h**, so the row sum in Excel can differ from LocalLog's total. *The fix depends on the open rounding/export questions; only document it for now.* | `js/core/export.js` |
-| B9 | Low | **The stopwatch resets to the current segment after a reload**, and differs from the table by 1 s (rounded down vs. rounded to nearest). | `js/timer.js`, `js/core/time.js` |
-| B10 | Low | **A rate typed as `1.234` is read as 1.234 €.** | `js/core/format.js` `parseAmount` |
-| B11 | Low | **Horizontal page scrolling at 375 px** (the entries table, the tab bar, and a `.visually-hidden` span in a table header). | `css/app.css` |
-| P1 | Info | **With 4,700 entries and range "All",** every change takes about 0.5 s and draws 4,700 rows. | `js/ui/entries.js` |
+| # | Decision |
+|---|---|
+| R3 | Works on phones (375 px) without horizontal page scrolling. |
+| R5 | Overlaps only give a warning; other entries are never changed automatically. Linked boundaries (D3-8) move the adjacent entry only after the user chose "Move both". |
+| R7, R8 | The grid is fixed at 15 minutes; the direction is "nearest" for now. The code supports "up" and "down" through `roundingMode`. |
+| R9 | No minimum duration. |
+| R11 | All open tabs stay in sync. Every new store and write must go through `storage.js` so it is broadcast. |
+| — | Every visible text exists in English and German; no inline styles or scripts; logic in pure `js/core/*` modules. |
 
 ---
 
 ## 3. Work packages
 
-Work in this order. Each package ends with its manual checks; automated tests are still deferred.
+Work in this order. Each package ends with manual checks; automated tests are still deferred (Q-T1).
 
-### WP1 – Data safety and timer consistency (B1, B2, B4, B5, B9, R11–R13)
+### WP1 – Data layout version 2 (transfer marks)
 
-1. **The database is the single source for the timer** (B2, B9):
-   - `TimerEngine` no longer keeps its own editable copy of the running entry.
-   - After every data change (local or from another tab), it re-reads the running entry from `state` / the database.
-   - The timer bar fields (project, ticket, note) follow the entry unless the user is typing in them right now.
-   - The stopwatch shows the current entry's duration from `startTime`, with the same rounding as the table (use `entryDurationSeconds`).
-   - Drop the in-memory `accumulated` counter, or recompute it from the entries of the current work session, so a reload shows the same value.
-2. **Tab sync** (B1, R11):
-   - Add a `BroadcastChannel('locallog')`. Every write in `storage.js` posts `{ type: 'changed' }`, and every tab reacts with `refreshData()` and a timer reload.
-   - Settings that affect the screen (language, theme, rates toggle, export range, reminder) also broadcast.
-   - **Guard rails in the timer:** `pause()`, `stop()` and `updateActive()` re-read the entry inside the write transaction. If it is already closed or deleted, they do nothing and reload instead of writing.
-   - Add `updateEntryIfOpen(id, patch)` to `storage.js` for this.
-   - `start()` first closes any other open entry found in the database, not only the cached one.
-3. **Resume within 1 minute** (B5, R12):
-   - If `resume()` is called less than 60 s after the pause closed the entry, reopen that entry (`endTime = ''`) instead of adding a new one.
-   - Keep the pause timestamp in memory and in a setting so it survives a reload.
-4. **Recovery prompt threshold** (B4, R13):
-   - Show the banner only when `now − lastSeenAt > 5 min`.
-   - Otherwise continue silently.
-   - Write `lastSeenAt` every 30 s as today.
-5. **Never delete open entries automatically** (B3, second part):
-   - If `load()` finds more than one open entry, close the older ones with `endTime` = the start of the next entry, or their own start + 1 min if that is earlier.
-   - Show a warning toast.
+1. **Make the upgrade safe.** `storage.js` `onupgradeneeded` currently creates all stores unconditionally, which **fails on an existing version-1 database**. Restructure it by `event.oldVersion`:
+   - `oldVersion < 1`: the current stores (customers, projects, entries, settings);
+   - `oldVersion < 2`: the new `transfers` store.
+2. **New store `transfers`:**
+   - `keyPath: 'key'`, where `key = 'YYYY-MM-DD|projectId'` (local date);
+   - fields `{ key, date, projectId, hours, seconds, transferredAt }`;
+   - `hours` = the rounded decimal hours at the moment of marking; `seconds` = the exact seconds.
+3. **Storage functions:** `getTransfers()`, `setTransfer(record)`, `deleteTransfer(key)`. All notify and broadcast like other writes.
+   - `deleteProject` keeps refusing while entries exist; it should also delete the project's transfer marks when it succeeds.
+   - Snapshot and `replaceAll` include transfers.
+4. **Backup:**
+   - new file `transfers.csv` with columns `Key, Date, ProjectId, Hours, Seconds, TransferredAt` (dot decimals, ISO time);
+   - `meta.csv` SchemaVersion 2;
+   - loading a **version-1 backup** (no `transfers.csv`) is accepted with no transfer marks;
+   - validation: unknown `ProjectId` → the row is skipped with a note; duplicate keys → rejected;
+   - the "folder has a backup" check is unchanged.
+5. Set `SCHEMA_VERSION = 2` in `js/version.js`. The About → Technical details text mentions `transfers.csv` (EN and DE).
 
 **Checks:**
-- Two tabs: stop in tab A → tab B shows stopped within 1 s, and pausing in B changes nothing.
-- An inline note edit on the running entry shows up in the timer bar and survives pause/resume.
-- Pause → resume after 10 s gives one entry; after 70 s it gives two.
-- A reload within 5 min shows no banner; with `lastSeenAt` set 10 min back, the banner appears.
+- Open the app with an existing 0.2.0 database → it upgrades without errors and the data is unchanged.
+- Backup round trip with transfers.
+- A 0.2.0 backup folder loads.
 
-### WP2 – Editing a running entry (R4, R5, R6)
+### WP2 – Linked boundaries for adjacent entries
 
-1. **Quick buttons and start time next to the stopwatch:**
-   - While a timer runs, show `−5 min` and `−15 min` buttons and the start time ("since 14:05").
-   - Clicking the start time opens a time input.
-   - Each change updates the running entry's `startTime` through the guarded update from WP1.
-2. **Table:** the running row's **start** cell becomes editable. Date, end and project stay locked; project changes go through the picker (step 4).
-3. **Validation:**
-   - The start can't be later than now.
-   - A typed time later than now means **yesterday**, which allows corrections across midnight.
-   - The start must not fall before the end of a running entry in another tab; WP1 makes this impossible.
-4. **Project correction within 2 minutes** (R6):
-   - If the picker changes while the running entry is younger than 2 minutes, call `updateActive({ projectId })` instead of `start()`.
-   - Show a short toast: "Project corrected".
-   - After 2 minutes, keep today's behaviour (a new entry after the 800 ms delay).
-   - Keep the 2-minute threshold as a named constant.
-5. **Overlap** (R5): if the new start overlaps another entry, save anyway and show the existing overlap warning toast. Don't change other entries.
-6. **Texts:** new texts in EN and DE ("since {time}", "−5 min", "−15 min", "Project corrected", error messages).
-
-**Checks:**
-- Start a timer, press −15 → the stopwatch jumps by 15 min and the table start matches.
-- Type a start time 1 hour ago → it's saved; type 23:50 shortly after midnight → it's saved as the previous day.
-- Change the project after 30 s → still one entry with the new project; after 3 min → two entries.
-- Overlap with the previous entry → a warning only.
-
-### WP3 – Rounding foundation and snapping (R7, R8, R10)
-
-1. **New pure module `js/core/rounding.js`:**
-   - `GRID_MINUTES = 15`.
-   - `roundTime(date, mode)` and `roundSeconds(seconds, mode)` with `mode` ∈ `'nearest' | 'up' | 'down'`.
-   - The mode comes from setting `roundingMode` (default `'nearest'`, no interface yet).
-2. **Snapping setting** (opt-in, off by default): in Settings, a "Snap timer to quarter hours" checkbox with a short explanation in EN and DE. When on:
-   - **start:** the new entry's `startTime` is rounded with the mode;
-   - **stop / pause:** `endTime` is rounded with the mode;
-   - **switching project:** the old entry ends and the new one starts at the **same** rounded boundary (no gap, no overlap);
-   - **safety:** if rounding would make `end ≤ start`, set the end to `start + 15 min` (rounding "nearest" on a 3-minute entry would otherwise collapse it) and show a toast;
-   - manual edits (table, dialog, −5/−15 buttons) are **never** snapped;
-   - the stopwatch during a snapped start shows the time from the snapped start (it may begin at a few minutes).
-3. **Don't build yet:** rounded hours in the table, weekly overview or export (open questions). Don't change B8 yet.
+1. **New pure logic** (`js/core/adjacent.js`):
+   - `ADJACENT_TOLERANCE_MS = 60000`;
+   - `findPrevious(entries, entry)` / `findNext(entries, entry)`: the closest entry ending/starting within the tolerance of this entry's start/end;
+   - `planBoundaryEdit(entries, entryId, side, newIso, now)` → `{ patches: [{ id, patch }], adjusted: [ids], error }`:
+     - `side = 'start'`: also move the previous entry's `endTime`;
+     - `side = 'end'`: also move the next entry's `startTime`;
+     - when the neighbour sits within the tolerance, both get exactly the same timestamp (this closes tiny gaps);
+     - **error** if any affected entry would end up with `end ≤ start` (error code `boundaryCollapse`);
+     - a running entry may be the "next" entry (its start moves); its end is never set;
+     - **no chain reaction:** only the direct neighbour moves.
+2. **Atomic save:** `updateEntries(patches)` in `storage.js` writes all patches in one transaction. A patch on an open entry uses the same guard as `updateEntryIfOpen` (if the entry was closed elsewhere, the whole save is aborted with the existing "changed elsewhere" message).
+3. **Asking each time (D3-8):** when an inline edit of `start` or `end` (Entries tab or Day view) touches a boundary that has an adjacent neighbour, open a small dialog **before saving**:
+   - text: "The next entry (Customer › Project, 10:00–11:00) starts where this one ends. Move its start to 10:20 too?" (or the equivalent for the previous entry's end);
+   - buttons: **"Move both"** (atomic save of both patches), **"Only this entry"** (saves only the edited entry; the normal overlap warning applies if they now overlap), **"Cancel"** (nothing is saved and the cell returns to its old value);
+   - Enter = "Move both", Esc = "Cancel";
+   - if "Move both" would collapse the neighbour (`boundaryCollapse`), the dialog shows the error and offers only "Only this entry" and "Cancel";
+   - without an adjacent neighbour, no dialog appears (today's behaviour).
+   - A dialog must be added to `index.html` and use the existing modal styles. It is not a native `confirm()`, because its buttons must be translated.
+4. **Day view** (part of WP3, listed here for the logic):
+   - entries of the day in **chronological order** (oldest first);
+   - **between two touching entries**, a single boundary time row ("11:15"). Editing this row means editing the shared boundary, so it **also asks** with the same dialog, with "Move both" preselected. "Only this entry" moves only the earlier entry's end there;
+   - **between entries with a gap**, a gap row ("10:15–10:45 · 30 min not tracked") with two buttons: **"Extend previous"** (the previous end becomes the gap end) and **"Extend next"** (the next start becomes the gap start);
+   - a **small overlap** (the next starts before the previous ends) shows a warning row ("Overlap 11:10–11:15") with the same two buttons, which then shorten instead of extend.
+5. **Texts** in EN and DE.
 
 **Checks:**
-- With snapping off, nothing changes.
-- With snapping on, start at 10:07 → start 10:00; stop at 10:52 → end 10:45; switch at 11:08 → old end and new start both 11:15.
-- A 3-minute entry → at least 15 min, with a toast.
+- A 09:00–10:00 + B 10:00–11:00: set A's end to 10:20 → the dialog appears; "Move both" → B starts 10:20.
+- Same with "Only this entry" → only A changes, and an overlap warning appears.
+- Same with "Cancel" → nothing changes.
+- Set B's start to 09:40, "Move both" → A ends 09:40.
+- Set A's end to 11:30 → the dialog says B would have no time left and offers only "Only this entry" / "Cancel".
+- An entry without a touching neighbour → no dialog.
+- A gap of 30 min: "Extend previous" closes it.
+- A running entry as B: its start moves, and the stopwatch follows.
+- Two tabs: the change appears in the other tab.
 
-### WP4 – Away time and long-running warning (R14, R15)
+### WP3 – Day view and day transfer
 
-1. **Away detection without permissions:**
-   - The heartbeat (every 1 s) remembers the last tick.
-   - If a tick arrives more than 10 minutes after the previous one (sleep, hibernation, frozen tab) while a timer runs, show a banner: "You were away {from}–{to}. Keep this time / Remove as a break / Stop at {from}".
-   - "Remove as a break" closes the entry at `from` and starts a new one at `to` with the same project, note and ticket.
-   - The 10-minute threshold is a named constant.
-2. **Long-running warning:**
-   - When a running entry passes 10 hours, or its start date is before today, show a banner: "The timer has been running since {date time}. Still working?"
-   - Buttons: "Keep running" (don't ask again for this entry), "Stop at …" (a time input), "Stop now".
-   - Remember "don't ask again" per entry ID in a setting.
+1. **New tab "Day"** (after "Entries"): `Entries | Day | Week | Customers & Projects | Settings | About`. On phones the tab bar keeps scrolling inside its container.
+2. **Navigation:** "Previous day", "Today", "Next day", and a date input. The label shows the long date with weekday (browser locale). The selected day is kept while the app is open (not stored).
+3. **Section "Per project"** (the transfer list): one row per project with time on that day (`projectDayTotals`, see step 6). Columns:
+   - colour dot + "Customer › Project";
+   - **hours rounded** (decimal, large);
+   - "exact h:mm" (small);
+   - a **copy button**: copies the rounded hours as text in the browser locale (e.g. `2,25`), with a toast "Copied 2,25";
+   - a **"Transferred" checkbox**:
+     - ticking stores the transfer mark (WP1);
+     - unticking asks nothing and removes it;
+     - if the mark's stored hours ≠ current rounded hours, show an amber note "changed since transfer (was 2,25)" and keep the box ticked until the user re-ticks or unticks.
+   - Footer: day total (sum of rounded rows) and exact total.
+   - **Running entries:** they count up to now (the value updates every minute); the project's row is marked "running" and its transfer checkbox is disabled until the timer stops.
+   - With rates switched on: a value column (rounded hours × effective rate).
+4. **Section "Entries"** for that day:
+   - chronological list with the boundary, gap and overlap rows from WP2;
+   - **entries across midnight** (D3-9) appear on both days. On the start day they show "23:00 – 24:00 · continues next day"; on the next day "00:00 – 01:00 · from previous day". Editing them changes the real entry (its real start/end), not the part;
+   - each entry shows its times, project, ticket and note, and supports the same inline editing as the table (shared editor code from `js/ui/entries.js`, extracted into a reusable helper);
+   - an **"Add entry" button** that opens the existing dialog with the **selected date** prefilled (start/end defaults as today's dialog). This is the only dialog change.
+5. **Export for the day:** the existing export menu with a new range kind `day` (with the selected date):
+   - "Copy table" and "Download as CSV" of the **per-project rows**: columns Project, Hours (rounded), Exact (h:mm), and Value if rates are on;
+   - file name `locallog-YYYY-MM-DD-day.csv`;
+   - the entry-level export in the Entries tab stays unchanged (B8 / Q-R3 still open there).
+6. **Pure logic** (`js/core/report.js`):
+   - `localDateKey(date)` → `'YYYY-MM-DD'`;
+   - `splitAtMidnight(entry, now)` → the parts of an entry per local day `[{ dateKey, startMs, endMs }]` (D3-9). It must use local midnights (`addDays(startOfDay(…))`), so the daylight-saving change gives 23 or 25 hour days correctly. A running entry is split up to `now`;
+   - `projectDayTotals({ entries, projects, customers, date, mode, now })` → `[{ project, customer, label, seconds, roundedSeconds, hours, running }]`, sorted as D3-2. It sums only the parts of each entry that fall on `date`, then rounds the total per project;
+   - `transferState(record, currentHours)` → `'none' | 'done' | 'changed'`.
+7. **Phone:** the per-project rows become two-line cards (label on top; hours, copy and tick below). The entries list uses the existing card layout.
+
+**Checks:**
+- A day with 3 projects: rounded values are correct (e.g. 2:17 → 2,25; 0:52 → 0,75; 0:05 → 0,00); copy puts `2,25` (German browser) or `2.25` (English) on the clipboard.
+- An entry 23:00–01:00 → 1,00 h on each day; both days list it with the "continues" / "from previous day" note; the Entries tab still shows it once.
+- An entry across the daylight-saving night is split correctly.
+- Ticking "transferred", then editing an entry so the value changes → the amber note appears.
+- Previous/next/date input work across month ends and the daylight-saving change.
+- "Add entry" from the Day view prefills the date.
+- Phone width: no horizontal page scrolling.
+
+### WP4 – Week timesheet grid (replaces the weekly overview)
+
+1. **New tab "Week"**; remove the "Weekly overview" card from the Entries tab, including its old customer → project summary code (`summarizeByCustomer` can stay in `export.js` only if still used elsewhere; otherwise remove it).
+2. **Navigation:** previous / this week / next, plus a label "16 Nov 2026 – 22 Nov 2026" (as today).
+3. **The grid:**
+   - rows = projects with any time in the week (D3-2 order);
+   - columns = Mon … Sun (weekday + date);
+   - cells = rounded day hours from `projectDayTotals` (empty when 0);
+   - a **row total** column, a **day total** row, and the grand total;
+   - below the grid: "exact 37:42" for the week;
+   - the **cell marker** reflects the transfer state of that day/project: a check mark for transferred, amber for changed since transfer;
+   - **clicking a cell or a day header** opens the Day tab on that date;
+   - with rates on: a value column per row and a value total, but **no value per day cell** (D3-12);
+   - entries across midnight are split (D3-9), also across the Sunday → Monday week boundary.
+4. **Export of the week:** the export menu exports **the grid**: header Project, Mon dd.mm., …, Sun dd.mm., Total. Cells use the rounded decimal hours in the browser locale; empty cells are empty. Copy and CSV work as for the day.
+5. **Pure logic** in `js/core/report.js`: `weekGrid({ entries, projects, customers, weekStart, mode, now })` → `{ days: [Date×7], rows: [{ project, customer, label, cells: [{ seconds, roundedSeconds }]×7, totalRounded }], dayTotals, totalRounded, totalExact }`.
+6. **Phone:** the grid scrolls horizontally **inside its own container**, with the project column sticky on the left. The page itself never scrolls sideways.
+
+**Checks:**
+- A week with entries on 4 days for 3 projects: cells match the Day view for each day; the row totals add up; the grand total equals the sum of the day totals.
+- Clicking a cell opens the Day view on that date.
+- Transfer marks show in the cells.
+- The export pastes into Excel as a grid.
+- 375 px: only the grid container scrolls.
+
+### WP5 – Project correction hint with Undo (D3-13)
+
+1. **Toast with an action:** extend `toast()` in `js/ui/dom.js` with an optional action `{ label, onClick }`.
+   - The button is part of the toast and reachable by keyboard.
+   - A toast with an action stays visible for 8 seconds.
+2. **After the 2-minute project correction:** show "Project corrected: Customer › Project" with **Undo**.
+   - Undo writes the previous `projectId` back through `updateEntryIfOpen`.
+   - If the entry was stopped meanwhile, write with `updateEntry`, because the correction concerns the same entry.
+   - The picker follows.
+   - The 2-minute threshold stays unchanged.
 3. **Texts** in EN and DE.
 
 **Checks:**
-- Simulate a gap: set the last tick 20 min back in the console → the away banner appears.
-- Create a running entry that started yesterday → the long-running banner appears.
+- Start a timer, change the project after 30 s → the hint with Undo appears.
+- Undo → the original project is back, in the table, the timer bar and a second tab.
+- After 3 min → no hint; a new entry as before.
 
-### WP5 – Phone layout (R3, B11)
+### WP6 – Documentation and release 0.3.0
 
-1. No horizontal page scrolling at 375 px:
-   - the tab bar scrolls inside its own container;
-   - `.visually-hidden` gets `position: absolute` inside a `position: relative` cell, or uses `clip-path` without width;
-   - check every card.
-2. **Entries table under 640 px:** show each entry as a stacked card: date + times on the first line, customer › project on the second, ticket, note, duration and hours.
-   - Inline editing keeps working; tapping a value edits it.
-   - The running entry shows the −5/−15 buttons.
-3. The timer card, the "Your data" card and the dialogs fit at 375 px; touch targets are at least 40 px high.
-4. The weekly overview's bars and names wrap cleanly.
-
-**Checks:** in a 375 × 812 viewport, `document.documentElement.scrollWidth === clientWidth` in all four tabs and with every dialog open; one full workflow is possible by tapping only.
-
-### WP6 – Backup and import robustness (B3 first part, B7)
-
-1. **`fromBackupFiles` validation:**
-   - Reject duplicate IDs per file.
-   - Colour must match `#RRGGBB` (otherwise use a default colour and count a warning).
-   - Entries with `end ≤ start` are rejected with a clear message naming the row.
-   - Ticket templates that fail `validateTicketTemplate` are imported as empty, with a warning.
-   - At most one open entry; close extra ones as in WP1 step 5.
-2. **Excel-saved files** (default, see OPEN-QUESTIONS Q-B2):
-   - Detect the separator from the header line (`,` or `;`) and accept both, as well as an optional BOM.
-   - If the timestamps were changed by Excel and can no longer be read as ISO dates, show the message "The backup files were changed by a spreadsheet program and can't be read. Please use an unchanged copy."
-3. **Before "Load from folder"** replaces the browser data, **automatically download a safety copy** of the current data (the existing `downloadBackup()`), unless the browser has no entries.
-
-**Checks:** reuse the cases from the exploratory test (duplicate IDs, bad colour, end before start, `;` file with BOM); each gives a clear result.
-
-### WP7 – Smaller fixes (B6, B10, P1, manifest, version check)
-
-1. **Update banner instead of automatic reload** (B6; default, see Q-B3): when a new service worker takes control, show the banner "A new version of LocalLog is available" with a "Reload" button. Never reload automatically.
-2. **Rate input** (B10): below the rate field, show the parsed value live ("= 1,234.00 €/h" or "= 1.23 €/h"), so mistakes are visible.
-3. **Paging** (P1): show at most 200 rows, plus a "Show more" button that adds 200 more. Totals still use all entries. Re-render only the rows when data changes.
-4. **Manifest:** add a 512 px icon with `"purpose": "any"` next to the maskable one.
-5. **Version check:** add `tools/check.mjs` (Node, no dependencies). It fails when `APP_VERSION` ≠ `VERSION` in `sw.js`, when a file in `js/` or `css/` is missing from `ASSETS_TO_CACHE`, or when an entry in `ASSETS_TO_CACHE` doesn't exist. Document it in the README.
-6. **Local test server:** add `tools/serve.mjs` (Node, no dependencies, sends `Cache-Control: no-cache`) to replace `server.ps1` (default, see Q-H1).
-
-### WP8 – Documentation
-
-1. **Delete `server.ps1`** (R2).
-2. **`HANDOFF.md`:**
-   - Set the status to 0.2.0.
-   - Correct "service worker could not be verified": it registers and controls the page in the in-app browser (verified 2026-11-22).
-   - List what is still unverified: folder picker, mini window, notifications, install prompt, GitHub Pages.
-3. **`README.md`:**
-   - "Run locally" → `node tools/serve.mjs`; remove the `python` and `npx serve` instructions.
-   - Add a note on the offline cache during development (bump the version, or DevTools → Application → "Update on reload").
-   - Mention `tools/check.mjs`.
-   - Add a "How it works" section: keyboard shortcuts (Alt+S, Alt+C, Alt+P); changing the project while running (correction within 2 min, otherwise a new entry); −5/−15 buttons; resume within 1 min; recovery, away and long-running prompts; snapping setting; tab sync.
-   - Update the structure list (`tools/`, `LICENSE`, `js/core/rounding.js`).
-4. **About → Technical details** (EN and DE): mention tab sync and that snapping is optional.
-5. **`.gitignore`:** remove the PowerShell-era entries (`Backup_*/`, `*.db`, `*.wal`, `*.shm`, `*.bak`). Keep `*.csv` and `*.tmp`.
-6. **`communication`:** add the start-time correction and phone support briefly; no other changes.
-7. **`CHANGELOG.md`** (new): entries for 0.1.0 (summary of round 1) and 0.2.0.
-
-### WP9 – Release 0.2.0
-
-1. Bump `APP_VERSION` and `VERSION` to `0.2.0`; run `node tools/check.mjs`.
-2. Do a manual run in the in-app browser:
-   - all checks of WP1–WP7;
-   - EN/DE complete (all new texts in both);
-   - dark mode;
-   - 375 px;
-   - no console errors;
-   - `fetch()` blocked by the security policy.
-3. Fill in `CHANGELOG.md`.
+1. **`README.md`:**
+   - new sections "Day view and transferring hours", "Week timesheet" and "Adjacent entries" (linked boundaries, extend buttons);
+   - the rounding note: evaluations round each day and project to 15 minutes; the entry export stays exact;
+   - the midnight note: evaluations split entries at midnight; the entry list does not;
+   - the project correction hint with Undo;
+   - update the structure list (`js/core/report.js`, `js/core/adjacent.js`, the new UI files) and the backup file list (`transfers.csv`);
+   - "What you can do": replace "Weekly overview" with the Day view and the Week timesheet; mention the dialog that asks before moving an adjacent entry;
+   - "How to back up": list `transfers.csv` with the other files.
+2. **`HANDOFF.md`:** status 0.3.0, what was verified, and what is still unverified.
+3. **`HANDOFF-TO-IMPLEMENTATION.md`:** change the status line to "implemented in version 0.3.0" with the date.
+4. **`OPEN-QUESTIONS.md`:** update "Last updated"; move anything decided during implementation into the decided state; keep the entry-export questions (Q-R1 rest, Q-R2 rest, Q-R3, Q-R4) and the rest of Q-T-1 open.
+5. **`CHANGELOG.md`:** add a 0.3.0 entry.
+6. **In-app texts (EN and DE):**
+   - About → intro: mention the Day and Week evaluations;
+   - About → Technical details: the `transfers` store and `transfers.csv`, the data layout version 2, rounding per day and project in the evaluations, and splitting at midnight;
+   - the hint line under the entries table: mention the dialog for adjacent entries;
+   - run the key comparison between English and German again (both must have the same keys).
+7. **`communication`:** add one line about the day/week evaluation for transferring hours.
+8. **Release:**
+   - bump `APP_VERSION` and `sw.js` `VERSION` to `0.3.0`;
+   - add the new files to `ASSETS_TO_CACHE`;
+   - run `node tools/check.mjs`;
+   - manual run in the in-app browser: all checks above, EN/DE complete, dark mode, 375 px, no console errors, upgrade from a 0.2.0 database.
 
 ---
 
 ## 4. Not in this round
 
-- Everything in [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), in particular: what rounding applies to, rounded export columns, the B8 fix, and further features (undo, recent tasks, gap filling, …).
-- Automated tests (still deferred). The exploratory checks from 2026-11-22 are listed in OPEN-QUESTIONS (Q-T1).
-- `IdleDetector` (R14).
-- A minimum duration (R9).
+- Anything open in [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), in particular rounding and columns in the **entry-level** export (Q-R3, Q-R4 / B8).
+- Combined notes/tickets in the day transfer (decided: no, D3-10).
+- Locking transferred days (decided: no, D3-11).
+- Values per day cell in the week grid (decided: no, D3-12).
+- Changes to the "Add entry" dialog beyond prefilling the date (D3-7).
+- Automated tests (still deferred).

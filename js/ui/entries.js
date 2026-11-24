@@ -1,18 +1,19 @@
 // Entries tab: table with inline editing, the "Add entry" dialog and today's total.
 
-import { state, saveSetting, refreshData } from '../state.js';
+import { state, saveSetting } from '../state.js';
 import { t, tn } from '../i18n.js';
 import { h, clear, colorDot, icon, toast, errorText } from './dom.js';
 import { fillProjectSelect } from './picker.js';
 import { createExportMenu } from './export.js';
+import { isEditing, startInlineEdit } from './entry-editor.js';
 import {
   entryDurationSeconds, formatClock, rangeFor, inRange, dayRange, totalSeconds, secondsToHours,
-  overlappingEntries, toDateInputValue, toTimeInputValue, combineDateTime, latestOccurrenceUpTo
+  overlappingEntries, toDateInputValue, toTimeInputValue, combineDateTime
 } from '../core/time.js';
 import { formatDate, formatTime, formatHours, formatMoney } from '../core/format.js';
 import { resolveEntry } from '../core/export.js';
-import { validateTimes, validateStartNotFuture, buildTicketUrl } from '../core/validate.js';
-import { addEntry, updateEntry, updateEntryIfOpen, deleteEntry } from '../storage.js';
+import { buildTicketUrl } from '../core/validate.js';
+import { addEntry, deleteEntry } from '../storage.js';
 import { requestPersistence } from '../backup.js';
 
 const $ = (id) => document.getElementById(id);
@@ -20,8 +21,6 @@ const $ = (id) => document.getElementById(id);
 // At most this many rows are drawn; "Show more" adds another page. Totals always use all entries.
 const ROW_PAGE = 200;
 
-let editing = null;
-let renderPending = false;
 let visibleRows = ROW_PAGE;
 let adjustStart = async () => {};
 
@@ -30,8 +29,7 @@ let adjustStart = async () => {};
 // ---------------------------------------------------------------------------
 
 export function renderEntries() {
-  if (editing) { renderPending = true; return; }
-  renderPending = false;
+  if (isEditing()) return; // the screen is redrawn when the edit ends
 
   const now = new Date();
   const showMoney = state.settings.includeRates;
@@ -137,139 +135,6 @@ export function renderToday(now = new Date()) {
   $('txtTodayCount').textContent = tn('today.blocks', today.length);
 }
 
-// ---------------------------------------------------------------------------
-// Inline editing
-// ---------------------------------------------------------------------------
-
-function makeEditor(field, entry) {
-  switch (field) {
-    case 'date':
-      return h('input', { type: 'date', class: 'cell-input', value: toDateInputValue(new Date(entry.startTime)), required: true });
-    case 'start':
-      return h('input', { type: 'time', class: 'cell-input', step: '60', value: toTimeInputValue(new Date(entry.startTime)), required: true });
-    case 'end':
-      return h('input', { type: 'time', class: 'cell-input', step: '60', value: toTimeInputValue(new Date(entry.endTime)), required: true });
-    case 'project': {
-      const select = h('select', { class: 'cell-input' });
-      fillProjectSelect(select, entry.projectId);
-      return select;
-    }
-    case 'ticket':
-      return h('input', { type: 'text', class: 'cell-input', maxlength: '60', value: entry.ticket || '', placeholder: t('entry.ticketPlaceholder') });
-    default:
-      return h('input', { type: 'text', class: 'cell-input', maxlength: '500', value: entry.note || '' });
-  }
-}
-
-function fail(code) {
-  toast(errorText(code), 'error');
-  return false;
-}
-
-/** Applies the edited value. Returns false when the change was rejected. */
-async function commitEdit(entry, field, value) {
-  let patch;
-  const timeMatch = /^(\d{1,2}):(\d{2})/.exec(value);
-
-  if (field === 'date') {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    if (!m) return fail('invalidTime');
-    const oldStart = new Date(entry.startTime);
-    const newStart = new Date(oldStart);
-    newStart.setFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    const shift = newStart.getTime() - oldStart.getTime();
-    if (shift === 0) return true;
-    // Moving to another day keeps start time and duration.
-    patch = { startTime: newStart.toISOString(), endTime: new Date(Date.parse(entry.endTime) + shift).toISOString() };
-  } else if (field === 'start' && !entry.endTime) {
-    // Running entry: a typed time later than now means yesterday, so corrections across midnight work.
-    if (!timeMatch) return fail('invalidTime');
-    if (value === toTimeInputValue(new Date(entry.startTime))) return true;
-    const moved = latestOccurrenceUpTo(Date.now(), value);
-    if (!moved) return fail('invalidTime');
-    const problem = validateStartNotFuture(moved.getTime(), Date.now());
-    if (problem) return fail(problem);
-    patch = { startTime: moved.toISOString() };
-  } else if (field === 'start' || field === 'end') {
-    const key = field === 'start' ? 'startTime' : 'endTime';
-    const base = new Date(entry[key]);
-    if (!timeMatch) return fail('invalidTime');
-    if (value === toTimeInputValue(base)) return true; // unchanged: keep the exact seconds
-    base.setHours(Number(timeMatch[1]), Number(timeMatch[2]), 0, 0);
-    patch = { [key]: base.toISOString() };
-  } else if (field === 'project') {
-    const id = Number(value);
-    if (!id || id === entry.projectId) return true;
-    patch = { projectId: id };
-  } else if (field === 'ticket') {
-    if (value.trim() === (entry.ticket || '')) return true;
-    patch = { ticket: value.trim() };
-  } else {
-    if (value === (entry.note || '')) return true;
-    patch = { note: value };
-  }
-
-  const merged = { ...entry, ...patch };
-  if (entry.endTime) {
-    const error = validateTimes(merged.startTime, merged.endTime);
-    if (error) return fail(error);
-    if (overlappingEntries(merged, state.entries).length > 0) toast(t('entry.overlapWarning'), 'warning');
-  } else if (patch.startTime && overlappingEntries(merged, state.entries).length > 0) {
-    // Overlap with another entry only gives a warning; nothing else is changed.
-    toast(t('entry.overlapWarning'), 'warning');
-  }
-
-  try {
-    if (!entry.endTime) {
-      // Running entry: only written while it is still open (another window may have stopped it).
-      const saved = await updateEntryIfOpen(entry.id, patch);
-      if (!saved) toast(t('entry.changedElsewhere'), 'warning');
-      return true;
-    }
-    await updateEntry(entry.id, patch);
-    return true;
-  } catch (err) {
-    console.error(err);
-    return fail('saveFailed');
-  }
-}
-
-function startEdit(td) {
-  if (editing) return;
-  const tr = td.closest('tr');
-  const id = Number(tr.dataset.id);
-  const field = td.dataset.field;
-  const entry = state.entries.find((e) => e.id === id);
-  if (!entry) return;
-  if (!entry.endTime && field !== 'note' && field !== 'ticket' && field !== 'start') return;
-
-  const editor = makeEditor(field, entry);
-  editing = { id, field, done: false };
-  td.classList.add('editing');
-  td.replaceChildren(editor);
-  editor.focus();
-  if (typeof editor.select === 'function' && editor.type === 'text') editor.select();
-
-  const finish = async (commit, refocus) => {
-    if (!editing || editing.done) return;
-    editing.done = true;
-    if (commit) await commitEdit(entry, field, editor.value);
-    editing = null;
-    await refreshData(); // renders with the saved values
-    if (refocus) {
-      const cell = document.querySelector(`#tbodyEntries tr[data-id="${id}"] [data-field="${field}"]`);
-      if (cell) cell.focus();
-    }
-  };
-
-  editor.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false, true); }
-  });
-  editor.addEventListener('blur', () => finish(true, false));
-  if (editor.tagName === 'SELECT') editor.addEventListener('change', () => finish(true, true));
-}
-
 async function handleDelete(id) {
   const entry = state.entries.find((e) => e.id === id);
   if (!entry) return;
@@ -303,13 +168,14 @@ function updateDurationPreview() {
   return { start, end };
 }
 
-function openAddDialog(preferredProjectId) {
+/** `date` (a Date, optional) is the day the dialog opens with, for example the selected day of the Day view. */
+function openAddDialog(preferredProjectId, date = null) {
   if (!fillProjectSelect($('dlgEntryProject'), preferredProjectId)) {
     toast(t('entry.needProject'), 'warning');
     return;
   }
   const now = new Date();
-  $('dlgEntryDate').value = toDateInputValue(now);
+  $('dlgEntryDate').value = toDateInputValue(date || now);
   $('dlgEntryStart').value = toTimeInputValue(new Date(now.getTime() - 3600 * 1000));
   $('dlgEntryEnd').value = toTimeInputValue(now);
   $('dlgEntryTicket').value = '';
@@ -363,6 +229,14 @@ export function initEntries({ getPreferredProjectId, adjustStart: adjust }) {
     renderEntries();
   });
 
+  const startEdit = (td) => {
+    const id = Number(td.closest('tr').dataset.id);
+    const field = td.dataset.field;
+    const entry = state.entries.find((e) => e.id === id);
+    if (!entry) return;
+    startInlineEdit(td, entry, field, () => document.querySelector(`#tbodyEntries tr[data-id="${id}"] [data-field="${field}"]`));
+  };
+
   const tbody = $('tbodyEntries');
   tbody.addEventListener('click', (e) => {
     if (e.target.closest('a')) return;
@@ -384,4 +258,6 @@ export function initEntries({ getPreferredProjectId, adjustStart: adjust }) {
   $('formEntry').addEventListener('submit', (e) => { e.preventDefault(); saveDialog(); });
   $('btnDlgEntryClose').addEventListener('click', () => $('dlgEntry').close());
   $('btnDlgEntryCancel').addEventListener('click', () => $('dlgEntry').close());
+
+  return { openAddDialog: (date) => openAddDialog(getPreferredProjectId(), date) };
 }

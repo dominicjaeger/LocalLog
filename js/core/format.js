@@ -7,6 +7,10 @@ const dateFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: '2-d
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 const longDateFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
+const weekdayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short' });
+const dayMonthFmt = new Intl.DateTimeFormat(undefined, { day: '2-digit', month: '2-digit' });
+const fullDateFmt = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
 const toDate = (v) => (v instanceof Date ? v : new Date(v));
 
 export function formatHours(hours) {
@@ -29,6 +33,24 @@ export function formatDate(v) {
 export function formatLongDate(v) {
   const d = toDate(v);
   return Number.isNaN(d.getTime()) ? '' : longDateFmt.format(d);
+}
+
+/** "Monday, 16 November 2026" (browser locale). */
+export function formatFullDate(v) {
+  const d = toDate(v);
+  return Number.isNaN(d.getTime()) ? '' : fullDateFmt.format(d);
+}
+
+/** Weekday and day.month for a column heading, for example "Mon 16.11." */
+export function formatDayShort(v) {
+  const d = toDate(v);
+  return Number.isNaN(d.getTime()) ? '' : `${weekdayFmt.format(d)} ${dayMonthFmt.format(d)}`;
+}
+
+/** Whole seconds as h:mm (hours may exceed 24), for example 8220 -> "2:17". Seconds are cut off. */
+export function formatHm(seconds) {
+  const total = Math.max(0, Math.floor(seconds / 60));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
 export function formatTime(v) {

@@ -1,4 +1,4 @@
-// LocalLog - IndexedDB storage (database "locallog", version 1).
+// LocalLog - IndexedDB storage (database "locallog", version = SCHEMA_VERSION).
 // No DOM access. All data stays in this browser.
 
 import { SCHEMA_VERSION } from './version.js';
@@ -53,15 +53,24 @@ function openDb() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      db.createObjectStore('customers', { keyPath: 'id', autoIncrement: true });
-      const projects = db.createObjectStore('projects', { keyPath: 'id', autoIncrement: true });
-      projects.createIndex('customerId', 'customerId');
-      const entries = db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true });
-      entries.createIndex('projectId', 'projectId');
-      entries.createIndex('startTime', 'startTime');
-      db.createObjectStore('settings', { keyPath: 'key' });
+      // Each step only runs for databases older than that layout version, so an existing
+      // version-1 database is upgraded without touching its data.
+      if (event.oldVersion < 1) {
+        db.createObjectStore('customers', { keyPath: 'id', autoIncrement: true });
+        const projects = db.createObjectStore('projects', { keyPath: 'id', autoIncrement: true });
+        projects.createIndex('customerId', 'customerId');
+        const entries = db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true });
+        entries.createIndex('projectId', 'projectId');
+        entries.createIndex('startTime', 'startTime');
+        db.createObjectStore('settings', { keyPath: 'key' });
+      }
+      if (event.oldVersion < 2) {
+        // Transfer marks: key = 'YYYY-MM-DD|projectId'.
+        const transfers = db.createObjectStore('transfers', { keyPath: 'key' });
+        transfers.createIndex('projectId', 'projectId');
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -157,16 +166,25 @@ export async function updateCustomer(id, patch) {
  * Deletes a customer and its projects. Refuses (error.code === 'hasEntries') while any entry references them.
  */
 export async function deleteCustomer(id) {
-  await withTx(['customers', 'projects', 'entries'], 'readwrite', async ({ customers, projects, entries }) => {
+  await withTx(['customers', 'projects', 'entries', 'transfers'], 'readwrite', async ({ customers, projects, entries, transfers }) => {
     const owned = await rq(projects.index('customerId').getAll(id));
     for (const p of owned) {
       const used = await rq(entries.index('projectId').count(p.id));
       if (used > 0) throw Object.assign(new Error('Customer has entries'), { code: 'hasEntries' });
     }
+    await deleteTransfersOf(transfers, owned.map((p) => p.id));
     for (const p of owned) await rq(projects.delete(p.id));
     await rq(customers.delete(id));
   });
   notifyChanged();
+}
+
+/** Deletes the transfer marks of the given projects (inside the caller's transaction). */
+async function deleteTransfersOf(transfersStore, projectIds) {
+  for (const projectId of projectIds) {
+    const keys = await rq(transfersStore.index('projectId').getAllKeys(projectId));
+    for (const key of keys) await rq(transfersStore.delete(key));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +219,10 @@ export async function updateProject(id, patch) {
 
 /** Refuses (error.code === 'hasEntries') while any entry references the project. */
 export async function deleteProject(id) {
-  await withTx(['projects', 'entries'], 'readwrite', async ({ projects, entries }) => {
+  await withTx(['projects', 'entries', 'transfers'], 'readwrite', async ({ projects, entries, transfers }) => {
     const used = await rq(entries.index('projectId').count(id));
     if (used > 0) throw Object.assign(new Error('Project has entries'), { code: 'hasEntries' });
+    await deleteTransfersOf(transfers, [id]);
     await rq(projects.delete(id));
   });
   notifyChanged();
@@ -299,6 +318,27 @@ export async function deleteEntry(id) {
   notifyChanged();
 }
 
+/**
+ * Saves several entry changes in ONE transaction: patches = [{ id, patch }].
+ * A patch with `onlyIfOpen: true` is only applied while the entry is still open; if any such entry was
+ * closed or deleted elsewhere, nothing is written and the result is { ok: false, reason: 'changedElsewhere' }.
+ * Returns { ok: true, entries: [saved...] }.
+ */
+export async function updateEntries(patches) {
+  const result = await withTx('entries', 'readwrite', async ({ entries }) => {
+    const saved = [];
+    for (const { id, patch, onlyIfOpen } of patches) {
+      const current = await rq(entries.get(id));
+      if (!current || (onlyIfOpen && current.endTime)) return { ok: false, reason: 'changedElsewhere' };
+      saved.push(mergeEntry(current, patch, id));
+    }
+    for (const next of saved) await rq(entries.put(next));
+    return { ok: true, entries: saved };
+  });
+  if (result.ok) notifyChanged();
+  return result;
+}
+
 /** Deletes an entry only while it is still open. Returns true when it was deleted. */
 export async function deleteEntryIfOpen(id) {
   const deleted = await withTx('entries', 'readwrite', async ({ entries }) => {
@@ -312,26 +352,48 @@ export async function deleteEntryIfOpen(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Transfer marks ("this day and project was transferred to another system")
+// ---------------------------------------------------------------------------
+
+export async function getTransfers() {
+  return withTx('transfers', 'readonly', ({ transfers }) => rq(transfers.getAll()));
+}
+
+/** record: { key, date, projectId, hours, seconds, transferredAt } */
+export async function setTransfer(record) {
+  await withTx('transfers', 'readwrite', ({ transfers }) => rq(transfers.put(record)));
+  notifyChanged();
+}
+
+export async function deleteTransfer(key) {
+  await withTx('transfers', 'readwrite', ({ transfers }) => rq(transfers.delete(key)));
+  notifyChanged();
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot / replace (backup)
 // ---------------------------------------------------------------------------
 
 export async function getSnapshot() {
-  return withTx(['customers', 'projects', 'entries'], 'readonly', async ({ customers, projects, entries }) => ({
+  return withTx(['customers', 'projects', 'entries', 'transfers'], 'readonly', async ({ customers, projects, entries, transfers }) => ({
     customers: await rq(customers.getAll()),
     projects: await rq(projects.getAll()),
-    entries: await rq(entries.getAll())
+    entries: await rq(entries.getAll()),
+    transfers: await rq(transfers.getAll())
   }));
 }
 
-/** Replaces all customers, projects and entries with the given data (single transaction). */
-export async function replaceAll({ customers, projects, entries }) {
-  await withTx(['customers', 'projects', 'entries'], 'readwrite', async (stores) => {
+/** Replaces all customers, projects, entries and transfer marks with the given data (single transaction). */
+export async function replaceAll({ customers, projects, entries, transfers = [] }) {
+  await withTx(['customers', 'projects', 'entries', 'transfers'], 'readwrite', async (stores) => {
     await rq(stores.customers.clear());
     await rq(stores.projects.clear());
     await rq(stores.entries.clear());
+    await rq(stores.transfers.clear());
     for (const c of customers) await rq(stores.customers.put(c));
     for (const p of projects) await rq(stores.projects.put(p));
     for (const e of entries) await rq(stores.entries.put(e));
+    for (const tr of transfers) await rq(stores.transfers.put(tr));
   });
   notifyChanged();
 }

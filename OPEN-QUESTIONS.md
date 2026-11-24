@@ -1,6 +1,6 @@
 # LocalLog – Open topics and questions
 
-Last updated: 2026-11-22. Answer here (or in chat). Once a question is decided, move it into [HANDOFF-TO-IMPLEMENTATION.md](HANDOFF-TO-IMPLEMENTATION.md) as a decision.
+Last updated: 2026-11-24 (after implementing round 3, version 0.3.0). Decided during implementation: Q-D2, Q-D4 and Q-D5 were built as "default assumed" (0,00 shown with the exact time; the copy button copies the rounded hours only; gap and overlap rows offer Extend/Shorten previous and next). Say if you want any of them changed. Answer here (or in chat). Once a question is decided, move it into [HANDOFF-TO-IMPLEMENTATION.md](HANDOFF-TO-IMPLEMENTATION.md) as a decision.
 
 Status labels:
 - **Open:** needs a decision; don't build.
@@ -11,17 +11,13 @@ Status labels:
 
 ## Rounding and export
 
-### Q-R1 – What does rounding apply to? (Open)
-The grid (15 min) and direction (nearest) are decided. Still unclear is what gets rounded for display and export:
-- **a)** each entry separately;
-- **b)** each day's total per project (avoids 4 × 5-minute calls becoming 4 × 15 minutes);
-- **c)** only the weekly total;
-- **d)** no rounding outside the opt-in snapping.
+### Q-R1 – What does rounding apply to? (Decided for the evaluations; open for the entry list)
+**Decided 2026-11-24 (round 3, D3-4):** the Day and Week evaluations round **each day's total per project** to 15 minutes.
+Still open: should the entry list (table hours column, "Today" card) and the entry-level export round anything, or stay exact?
 
-*Recommendation: b).*
-
-### Q-R2 – Where are rounded values shown? (Open)
-Options: table hours column, "Today" total, weekly overview, export. Should the exact value stay visible next to the rounded one (e.g. "exact 37:42 → billable 38:00")?
+### Q-R2 – Where are rounded values shown? (Decided for the evaluations; open elsewhere)
+**Decided (D3-5):** the Day and Week evaluations show the rounded decimal hours with the exact time next to them.
+Still open: the Entries tab and the "Today" card (currently exact).
 
 ### Q-R3 – Export columns (Open)
 - **a)** "Hours" (exact) plus "Billable hours" (rounded);
@@ -41,13 +37,45 @@ It is "nearest" for now. The code supports "up" and "down" (R8). Should users be
 
 ---
 
+## Day and week evaluation (round 3)
+
+### Q-D1 – Linked boundaries always on? (Decided 2026-11-24: ask each time)
+Editing a boundary shared with a touching entry asks "Move both / Only this entry / Cancel" (D3-8).
+
+### Q-D2 – Small amounts rounded to 0 (Default assumed: show 0,00 with the exact time)
+With "nearest", a project with less than 7.5 minutes on a day rounds to 0,00 h, so it disappears from the transfer. Options:
+- **a)** accept (shown as 0,00 with "exact 0:05");
+- **b)** round up to 0,25 when there is any time at all;
+- **c)** use direction "up" for the evaluations.
+
+Related: Q-F2 (minimum duration), Q-R5 (direction in Settings).
+
+### Q-D3 – Combined notes and tickets in the day transfer (Decided 2026-11-24: no)
+The day transfer covers hours only (D3-10).
+
+### Q-D4 – What exactly does the copy button copy? (Default assumed: rounded hours only, browser number format)
+Alternatives: hours with "h"; hours and project name; a whole row (tab-separated) for pasting into a spreadsheet.
+
+### Q-D5 – Gap and overlap buttons in the Day view (Default assumed: "Extend previous" / "Extend next")
+Should the gap row also offer "Add entry here" (the dialog with the gap's times prefilled)? This is related to Q-F1 #3 (gap filling).
+
+### Q-D6 – Lock transferred days? (Decided 2026-11-24: no lock)
+Entries stay editable; a later change only shows "changed since transfer" (D3-11).
+
+### Q-D7 – Entries across midnight (Decided 2026-11-24: split)
+The Day and Week evaluations split entries at local midnight; the stored entry and the entry list stay unchanged (D3-9).
+
+### Q-D8 – Week grid with rates (Decided 2026-11-24: no value per day cell)
+Only a value column per row and a value total (D3-12).
+
+---
+
 ## Timer behaviour
 
-### Q-T-1 – 2-minute project correction (Review later)
-Changing the project within the first 2 minutes corrects the running entry (R6). To review after some real use:
-- Is 2 minutes right?
-- Should there be a visible hint ("Project corrected – undo")?
-- Should it also apply right after resuming?
+### Q-T-1 – 2-minute project correction (Partly decided 2026-11-24)
+- 2 minutes is right (unchanged).
+- Yes, show a visible hint "Project corrected" with Undo (D3-13, round 3).
+- **Still open:** should the correction also apply right after resuming (within 2 minutes of resuming), or only after starting?
 
 ### Q-T-2 – "Start from end of last entry" suggestion (Default assumed: not built)
 When starting a timer shortly after the last entry ended (e.g. less than 30 min), offer "Start from 14:05". It isn't in the round 2 plan. Should it be built?
@@ -82,7 +110,7 @@ Alternative: reload automatically when nothing is being edited.
 Round 2 adds a `CHANGELOG.md`. Alternatively, track versions only in `HANDOFF.md`.
 
 ### Q-H3 – Old plan documents (Open)
-`HANDOFF-TO-IMPLEMENTATION.md` is now the round 2 plan; round 1 is summarised in its section 0. Should completed plans be moved to `docs/archive/`?
+`HANDOFF-TO-IMPLEMENTATION.md` is now the round 3 plan. The detailed round 2 plan was replaced; its results are in `CHANGELOG.md`. Should future completed plans be kept in `docs/archive/` instead of being overwritten?
 
 ---
 

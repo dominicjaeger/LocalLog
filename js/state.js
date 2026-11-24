@@ -1,6 +1,6 @@
 // In-memory copy of the data for the screens. Reloaded whenever the database changes.
 
-import { getCustomers, getProjects, getEntries, getSetting, setSetting, onDataChanged } from './storage.js';
+import { getCustomers, getProjects, getEntries, getTransfers, getSetting, setSetting, onDataChanged } from './storage.js';
 import { indexById } from './core/export.js';
 import { DEFAULT_ROUNDING_MODE, normalizeMode } from './core/rounding.js';
 
@@ -8,6 +8,8 @@ export const state = {
   customers: [],
   projects: [],
   entries: [],
+  transfers: [],
+  transfersByKey: new Map(),
   customersById: new Map(),
   projectsById: new Map(),
   settings: {
@@ -53,11 +55,13 @@ export async function saveSetting(key, value) {
 export function refreshData() {
   const seq = ++refreshSeq;
   latestRefresh = (async () => {
-    const [customers, projects, entries] = await Promise.all([getCustomers(), getProjects(), getEntries()]);
+    const [customers, projects, entries, transfers] = await Promise.all([getCustomers(), getProjects(), getEntries(), getTransfers()]);
     if (seq !== refreshSeq) return latestRefresh;
     state.customers = customers;
     state.projects = projects;
     state.entries = entries;
+    state.transfers = transfers;
+    state.transfersByKey = new Map(transfers.map((x) => [x.key, x]));
     state.customersById = indexById(customers);
     state.projectsById = indexById(projects);
     for (const cb of listeners) {
@@ -68,7 +72,7 @@ export function refreshData() {
   return latestRefresh;
 }
 
-/** Reload (coalesced) whenever customers, projects or entries change. */
+/** Reload (coalesced) whenever customers, projects, entries or transfer marks change. */
 export function watchDatabase() {
   onDataChanged(() => {
     if (refreshQueued) return;
